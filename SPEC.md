@@ -2,9 +2,9 @@
 
 ## Project: AI Multi-Agent Werewolf Game (One Night Werewolf)
 
-Version: 0.7-draft
+Version: 0.8-draft
 Repository: `garyohosu/werewolf-game`  
-Status: Phase 1 dry-run implemented and reviewed (APPROVED); Phase 2 prompt templates added
+Status: Phase 1 dry-run implemented (APPROVED); Phase 2 prompt templates added; Phase 2.5 PromptBuilder implemented
 
 ---
 
@@ -43,6 +43,9 @@ Status: Phase 1 dry-run implemented and reviewed (APPROVED); Phase 2 prompt temp
 - v0.7-draft (2026-07-09): Phase 1 dry-run実装（`034faed`）がレビューでAPPROVEDとなったことを受け、Phase 2（プロンプト整備）に着手。
   - `prompts/` に `speech_prompt.md` / `vote_prompt.md` を追加（14章）。発言ラウンド・投票ラウンド用のフェーズ別プロンプトとして、`common_player_prompt.md` および役職別プロンプトと組み合わせて使う。
   - 各プロンプトの安全ルール（ファイル操作・シェル実行の禁止、秘密情報の推測禁止、JSON以外の出力禁止）は16.4章の方針を踏襲し、連結し忘れた場合でも単体で機能するよう各ファイルに重複して記載する方針とした。
+- v0.8-draft (2026-07-09): Phase 3 real-CLI接続に備え、`prompts/*.md` を実際に読み込んで連結・プレースホルダ置換する `PromptBuilder`（`scripts/agents.py`）をPhase 2.5として実装。
+  - `prompts/common_player_prompt.md` の安全ルール説明文に、禁止対象であるはずのMarkdownコードフェンス記法自体が例示として埋め込まれてしまっていた誤りを修正（QandA.md参照）。
+  - `PromptBuilder`のメソッドシグネチャに`role`・`seer_result_summary`引数を追加した経緯をCLASS.md 3.4章に記録。
 
 ---
 

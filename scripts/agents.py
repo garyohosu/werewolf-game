@@ -1,15 +1,16 @@
 """Player agent configuration loading and response generation.
 
-SPEC.md v0.6-draft 5, 9, 10, 11, 15.1, 18 chapters.
+SPEC.md v0.6-draft/v0.7-draft 5, 9, 10, 11, 15.1, 18 chapters.
 """
 from __future__ import annotations
 
 import json
+import re
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import List, Sequence
+from typing import Dict, List, Sequence
 
-from models import AgentConfig
+from models import AgentConfig, Role
 from random_utils import RandomGenerator
 
 
@@ -123,3 +124,95 @@ class AgentInvoker(PlayerAgent):
 
     def generate_vote(self, player: str, candidates: Sequence[str], public_log: str) -> str:
         raise NotImplementedError("Phase 3 (real-agents) is not implemented yet")
+
+
+_ROLE_PROMPT_FILES: Dict[Role, str] = {
+    Role.VILLAGER: "villager_prompt.md",
+    Role.SEER: "seer_prompt.md",
+    Role.WEREWOLF: "werewolf_prompt.md",
+}
+
+# Matches the fenced ```text block under the "## 本文" heading in each
+# prompts/*.md file (see prompts/common_player_prompt.md for the format).
+_BODY_BLOCK_PATTERN = re.compile(r"## 本文\s*\n\s*```text\n(.*?)\n```", re.DOTALL)
+
+_PLACEHOLDER_PATTERN = re.compile(r"\{\{[a-z_]+\}\}")
+
+
+class PromptBuilder:
+    """Assembles the actual prompt text sent to an AI player from prompts/*.md.
+
+    CLASS.md 3章: used by AgentInvoker (Phase 3). Concatenates
+    common_player_prompt.md + role prompt + phase prompt, in that order, and
+    substitutes {{...}} placeholders (SPEC.md v0.7-draft 改訂履歴, prompts/*.md).
+    """
+
+    def __init__(self, prompts_dir: Path, player_names: Sequence[str]) -> None:
+        self._player_list_text = "、".join(player_names)
+        self._common_template = self._load_template(prompts_dir / "common_player_prompt.md")
+        self._role_templates: Dict[Role, str] = {
+            role: self._load_template(prompts_dir / filename)
+            for role, filename in _ROLE_PROMPT_FILES.items()
+        }
+        self._night_seer_template = self._load_template(prompts_dir / "night_seer_prompt.md")
+        self._speech_template = self._load_template(prompts_dir / "speech_prompt.md")
+        self._vote_template = self._load_template(prompts_dir / "vote_prompt.md")
+
+    def build_night_prompt(self, seer: str, candidates: Sequence[str]) -> str:
+        """夜フェーズ: 占い師の占いプロンプト（占い師以外は夜に行動しないため役職固定）。"""
+        phase_text = self._render(
+            self._night_seer_template, player_name=seer, candidates="、".join(candidates)
+        )
+        return self._assemble(seer, Role.SEER, phase_text)
+
+    def build_speech_prompt(
+        self, player: str, role: Role, public_log: str, seer_result_summary: str = ""
+    ) -> str:
+        phase_text = self._render(
+            self._speech_template,
+            player_name=player,
+            public_log=public_log,
+            seer_result_summary=seer_result_summary,
+        )
+        return self._assemble(player, role, phase_text)
+
+    def build_vote_prompt(
+        self,
+        player: str,
+        role: Role,
+        candidates: Sequence[str],
+        public_log: str,
+        seer_result_summary: str = "",
+    ) -> str:
+        phase_text = self._render(
+            self._vote_template,
+            player_name=player,
+            public_log=public_log,
+            candidates="、".join(candidates),
+            seer_result_summary=seer_result_summary,
+        )
+        return self._assemble(player, role, phase_text)
+
+    def _assemble(self, player: str, role: Role, phase_text: str) -> str:
+        common_text = self._render(self._common_template, player_name=player)
+        role_text = self._render(self._role_templates[role], player_name=player)
+        prompt = "\n\n".join([common_text, role_text, phase_text])
+
+        leftover = _PLACEHOLDER_PATTERN.search(prompt)
+        if leftover:
+            raise ValueError(f"unresolved placeholder {leftover.group(0)!r} in assembled prompt")
+        return prompt
+
+    def _render(self, template: str, **values: str) -> str:
+        text = template.replace("{{player_list}}", self._player_list_text)
+        for key, value in values.items():
+            text = text.replace("{{" + key + "}}", value)
+        return text
+
+    @staticmethod
+    def _load_template(path: Path) -> str:
+        content = path.read_text(encoding="utf-8")
+        match = _BODY_BLOCK_PATTERN.search(content)
+        if not match:
+            raise ValueError(f"{path}: could not find a '## 本文' text block")
+        return match.group(1)

@@ -608,3 +608,19 @@ Q30〜Q40はすべて解決し、SPEC.mdおよびSEQUENCE.mdへ反映済み。Ph
 | Q46 | seed具体値の契約 | 中 | 解決済み |
 | Q47 | Markdown書式 | 低 | 解決済み |
 | Q48 | 設定異常系 | 中 | 解決済み |
+
+---
+
+## Phase 2.5: PromptBuilder実装（2026-07-09）で判断した設計方針
+
+`SEQUENCE.md`・`CLASS.md`を元に`PromptBuilder`（`scripts/agents.py`）を実装した。実装中に見つかった2点を記録する。
+
+### Q49. `PromptBuilder`メソッドシグネチャへの`role`/`seer_result_summary`追加 [解決済み → CLASS.md 3.4章・実装に反映] **重大度: 中**
+
+- **問題**: CLASS.mdの当初のスタブは`build_speech_prompt(player, public_log)` / `build_vote_prompt(player, public_log)`だったが、`villager_prompt.md`/`seer_prompt.md`/`werewolf_prompt.md`のどれを連結するかは呼び出し時点のそのプレイヤーの役職に依存し、`{{seer_result_summary}}`も占い師かどうかに依存する。`PromptBuilder`自身はゲーム状態を保持しない設計のため、これらを引数で受け取る必要がある。
+- **決定した方針**: `build_speech_prompt(player, role, public_log, seer_result_summary="")` / `build_vote_prompt(player, role, candidates, public_log, seer_result_summary="")` にシグネチャを拡張した。`build_night_prompt(seer, candidates)` は夜フェーズの行動者が常に占い師のため変更なし。CLASS.md 3.4章に反映済み。
+
+### Q50. `common_player_prompt.md`内のMarkdownコードフェンス例示バグ [解決済み → prompts/common_player_prompt.md修正] **重大度: 中**
+
+- **問題**: `common_player_prompt.md`の出力ルール説明文が「Markdownのコードフェンス（```json のようなもの）で囲まないでください。」となっており、禁止しているはずのコードフェンス記法自体を本文中に literal に含んでいた。これにより (1) `PromptBuilder`のテスト（`assert "```" not in prompt`）が失敗し、(2) AIへの指示として自己矛盾する内容になっていた。
+- **決定した方針**: 該当行を「Markdownのコードフェンスで出力を囲まないでください。」に修正し、具体例の埋め込みをやめた。`tests/test_prompt_builder.py::test_real_prompts_do_not_contain_markdown_code_fences_in_body`で再発防止を検証する。

@@ -88,8 +88,11 @@ classDiagram
 
     class PromptBuilder {
         +build_night_prompt(seer, candidates) str
-        +build_speech_prompt(player, public_log) str
-        +build_vote_prompt(player, public_log) str
+        +build_speech_prompt(player, role, public_log, seer_result_summary) str
+        +build_vote_prompt(player, role, candidates, public_log, seer_result_summary) str
+        -assemble(player, role, phase_text) str
+        -render(template, values) str
+        -load_template(path) str
     }
 
     class JsonValidator {
@@ -250,6 +253,16 @@ classDiagram
 - `GameEngine`は`PlayerAgent`、`JsonValidator`、`FallbackHandler`、`LogWriter`、`RandomGenerator`をコンストラクタで受け取り、テストダブルへ差し替え可能にする。
 - `DryRunAgent`、`GameEngine`、`FallbackHandler`は、Runnerが起動時に1つだけ作成した同じ`RandomGenerator`インスタンスを共有する。
 - `LogWriter`は試合ディレクトリ群を格納する`logs_root`をコンストラクタで受け取る。本番は`logs/games`、pytestでは`tmp_path`配下を渡す。
+
+### 3.4 Phase 2.5: `PromptBuilder`のシグネチャ拡張
+
+当初のスタブ（本章1節）では`build_speech_prompt(player, public_log)` / `build_vote_prompt(player, public_log)`としていたが、実装（`scripts/agents.py`）で以下の理由により`role`と`seer_result_summary`を追加した。
+
+- `prompts/villager_prompt.md` / `seer_prompt.md` / `werewolf_prompt.md` のどれを連結するかは、呼び出し時点でのそのプレイヤーの役職に依存する。`PromptBuilder`自身はゲーム状態を保持しない設計としたため、呼び出し側（`GameEngine`が知っている情報）から`role`を渡す必要がある。
+- `speech_prompt.md` / `vote_prompt.md` の `{{seer_result_summary}}` プレースホルダは、占い師以外には空文字列を渡す必要があり、これも呼び出し側の状態（`seer_result`の有無）に依存するため引数化した。
+- `build_night_prompt(seer, candidates)` は夜フェーズで行動するのが常に占い師のみ（SPEC.md 9章）のため、`role`引数は不要で当初のシグネチャを維持した。
+
+`PromptBuilder`は`prompts/*.md`の「## 本文」セクション（```text ... ```で囲まれた部分のみ）を読み込み、`common_player_prompt.md` → 役職別プロンプト → フェーズ別プロンプトの順に連結し、`{{...}}`プレースホルダを置換する。置換後に`{{`が残っている場合は`ValueError`を送出し、プレースホルダの渡し漏れを実行時に検知する。
 
 ---
 
