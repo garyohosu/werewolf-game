@@ -1,0 +1,22 @@
+{
+  "Claude": {
+    "command": "claude",
+    "args": ["-p"],
+    "prompt_mode": "arg"
+  },
+  "Codex": {
+    "command": "codex",
+    "args": ["exec"],
+    "prompt_mode": "arg"
+  },
+  "Grok": {
+    "command": "grok",
+    "args": ["-p"],
+    "prompt_mode": "arg"
+  },
+  "agy": {
+    "command": "agy",
+    "args": ["--print"],
+    "prompt_mode": "stdin"
+  }
+}
