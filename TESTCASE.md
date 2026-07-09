@@ -161,3 +161,22 @@ Primary target: Phase 1 dry-run implementation, Phase 3 AgentInvoker
 ## 9. 実装開始判定
 
 Q42〜Q54は確定済み。pytest、共有RNGと依存注入、`tmp_path`、代表seed回帰、内容ベースのMarkdown検証、agents設定検証、`subprocess.run`モックによるPhase 3テストを用いてPhase 1・Phase 3テストを実装済み。Q55のルートショートカット再導入案は採用せず、TC-LOG-010でPhase 1・Phase 3ともルート直下3ファイルが作られないことを検証する。
+
+---
+
+## 10. Phase 4 集計テスト
+
+| ID | 条件 | 期待結果 |
+|---|---|---|
+| TC-ANA-001 | finished複数試合 | 総数・有効数と陣営別勝敗を集計 |
+| TC-ANA-002 | プレイヤー別データ | 勝率、役職別勝率、処刑数が正しい |
+| TC-ANA-003 | 役職別データ | 割当数、勝利数、勝率が正しい |
+| TC-ANA-004 | phase != finished | 警告付きでスキップ |
+| TC-ANA-005 | JSON破損 | 警告付きでスキップ |
+| TC-ANA-006 | 必須キー欠落 | 警告付きでスキップ |
+| TC-ANA-007 | logs-root不存在 | 非0終了 |
+| TC-ANA-008 | gameディレクトリなし | 有効0、警告付きで正常終了 |
+| TC-ANA-009 | --format markdown | Markdownを標準出力 |
+| TC-ANA-010 | --format json | 4トップレベルキーのJSONを標準出力 |
+| TC-ANA-011 | --output | 親ディレクトリを作成してファイル保存 |
+| TC-ANA-012 | public_log欠落 | 試合は有効。同票補助集計のみ対象外 |

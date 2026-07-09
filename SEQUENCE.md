@@ -541,3 +541,33 @@ sequenceDiagram
 - `phase`値の遷移、モードフラグの相互排他、CLI引数検証、書き込み失敗時の扱いが確定している。
 
 USECASE.md（Q24〜Q29）・SEQUENCE.md自体（Q30〜Q40）のレビュー指摘はいずれも解消済み。Phase 1 dry-run実装に進める状態である。
+
+---
+
+## 12. Phase 4 複数試合集計
+
+```mermaid
+sequenceDiagram
+    actor Operator as 運用者
+    participant Analyzer as analyze_results.py
+    participant Games as logs/games
+    participant Output as stdout / output file
+
+    Operator->>Analyzer: --logs-root / --format / --output
+    Analyzer->>Games: game_XXXX を番号順に列挙
+    loop 各試合
+        Analyzer->>Games: game_state.json 読込・検証
+        alt finishedかつ妥当
+            Analyzer->>Games: public_log.mdを補助読込
+            Analyzer->>Analyzer: 陣営・プレイヤー・役職成績を加算
+        else 未完了・破損・必須キー欠落
+            Analyzer->>Analyzer: skippedとwarningを加算
+        end
+    end
+    Analyzer->>Output: MarkdownまたはJSON
+```
+
+- `game_state.json`を正本とし、`raw/`は読まない。
+- `public_log.md`は同票処刑と人狼処刑票を判定する補助入力であり、欠落しても試合を無効にしない。
+- 1件の不正試合で全体処理を停止しない。
+- logs-root不存在だけは非0終了する。

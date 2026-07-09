@@ -302,3 +302,17 @@ classDiagram
 ## 4. QandA.mdに記録した不明点
 
 `SPEC.md` 14章のファイル構成は `run_game.py` / `agents.py` / `game_rules.py` / `json_utils.py` の4ファイルのみを列挙しているが、本クラス設計はこの4ファイルへの割り当てを前提にしている。後工程（実装時のファイル分割）に影響しうる点をQandA.mdに記録した（Q41参照）。
+
+---
+
+## 5. Phase 4 集計モデル
+
+`scripts/analyze_results.py`は以下の集計用データモデルと関数で構成する。
+
+- `RoleStats`: 役職の割当数、勝利数、勝率
+- `PlayerStats`: プレイヤーの試合数、勝利数、処刑数、役職別成績、人狼処刑票
+- `Summary`: overview、players、roles、warningsを保持しJSON構造へ変換
+- `aggregate(logs_root)`: `game_XXXX`を読み、妥当な完了試合を集計
+- `render_markdown(summary)`: Markdownレポート生成
+
+集計処理は既存の書き込み用`LogWriter`へ混在させず、読み取り専用モジュールとして分離する。

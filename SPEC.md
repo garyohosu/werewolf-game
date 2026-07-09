@@ -2,7 +2,7 @@
 
 ## Project: AI Multi-Agent Werewolf Game (One Night Werewolf)
 
-Version: 0.9-draft
+Version: 1.0-draft
 Repository: `garyohosu/werewolf-game`  
 Status: Phase 3 AgentInvoker implemented; pre-commit verification complete
 
@@ -49,6 +49,10 @@ Status: Phase 3 AgentInvoker implemented; pre-commit verification complete
 - v0.9-draft (2026-07-09): Phase 3 AgentInvoker の実装を完了。
   - `--use-real-agents` 時の外部AI呼び出し、一時ディレクトリ分離、タイムアウト/CLIエラーの安全なフォールバック、およびWindows/日本語環境でのデコードエラー（UnicodeDecodeError）の完全な回避策を実装。
   - Q33の方針を維持し、ルート直下へ最新状態ファイルを複製しない。保存先は`logs/games/game_XXXX/`配下のみとする。
+- v1.0-draft (2026-07-09): Phase 4 複数試合集計を実装。
+  - `scripts/analyze_results.py`で完了試合の勝率、プレイヤー別・役職別成績をMarkdown/JSON出力する。
+  - 不正・未完了試合は警告付きでスキップし、他試合の集計を継続する。
+  - 集計レポートの既定出力先候補`reports/`は生成物としてGit管理対象外とする。
 
 ---
 
@@ -387,6 +391,7 @@ JSONとして解釈できても、以下のいずれかに該当する場合は*
 │  └─ vote_prompt.md
 ├─ scripts/
 │  ├─ run_game.py
+│  ├─ analyze_results.py
 │  ├─ agents.py
 │  ├─ game_rules.py
 │  ├─ json_utils.py
@@ -423,7 +428,7 @@ JSONとして解釈できても、以下のいずれかに該当する場合は*
 
 Phase 1・Phase 3とも、状態ファイルの保存先は`logs/games/game_XXXX/`配下のみとする。リポジトリのルート直下に`game_state.json` / `public_log.md` / `results.md`のコピー、シンボリックリンク、ショートカットは作成しない。
 
-Phase 5で追加する `summary.md` など、複数試合を横断する集計ファイルは `logs/` 直下に置く。
+Phase 4の集計結果は既定では標準出力へ出し、`--output`指定時は任意のパスへ保存する。推奨先の`reports/`は生成物としてGit管理対象外とする。
 
 ---
 
@@ -721,13 +726,18 @@ agy --help
 
 - `--games 10` 自体の複数試合ループはPhase 1で実装済みのものを用いる。本Phaseでは、その結果の横断集計機能を追加する。
 - `logs/games/game_XXXX/` 単位の結果を横断集計する。
-- 勝率集計を出す。
-- 役職別の勝率を出す。
-- AI別の投票精度を記録する。
+- `game_state.json`を正本とし、`phase="finished"`かつ必須データが妥当な試合だけを有効試合として集計する。
+- 総試合数、有効・スキップ数、陣営別勝敗・勝率を出す。
+- プレイヤー別の試合数、勝利数、勝率、役職別成績、処刑回数を出す。
+- 役職別の割当数、勝利数、勝率を出す。
+- `public_log.md`の投票行を完全に解析できる場合は、人狼処刑へ投票した回数と同票処刑回数を補助集計する。
+- 不正JSON、必須キー欠落、未完了試合は警告に記録してスキップし、全体処理は継続する。
+- Markdownを標準出力の既定形式とし、`--format json`および`--output`をサポートする。
+- JSONは`overview` / `players` / `roles` / `warnings`をトップレベルキーとし、勝率は0.0〜1.0で表す。
 
 ### Phase 5: 記事化用ログ
 
-- `summary.md` を生成する。
+- Phase 4の集計結果を材料に、記事化用の要約を生成する。
 - note記事向けの見出し案を生成する。
 - 面白かった発言を抽出する。
 
