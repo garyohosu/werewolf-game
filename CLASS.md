@@ -67,23 +67,39 @@ classDiagram
     class PlayerAgent {
         <<interface>>
         +generate_night_action(seer, candidates) str
-        +generate_speech(player, public_log) str
-        +generate_vote(player, public_log) str
+        +generate_speech(player, role, public_log, seer_result_summary) str
+        +generate_vote(player, role, candidates, public_log, seer_result_summary) str
     }
 
     class DryRunAgent {
         -RandomGenerator rng
         +__init__(rng)
         +generate_night_action(seer, candidates) str
-        +generate_speech(player, public_log) str
-        +generate_vote(player, public_log) str
+        +generate_speech(player, role, public_log, seer_result_summary) str
+        +generate_vote(player, role, candidates, public_log, seer_result_summary) str
     }
 
     class AgentInvoker {
+        -Dict~str, AgentConfig~ configs
+        -PromptBuilder prompt_builder
+        -float timeout
+        +__init__(agent_configs, prompts_dir, timeout)
         +generate_night_action(seer, candidates) str
-        +generate_speech(player, public_log) str
-        +generate_vote(player, public_log) str
-        -invoke(agent_config, prompt) str
+        +generate_speech(player, role, public_log, seer_result_summary) str
+        +generate_vote(player, role, candidates, public_log, seer_result_summary) str
+        -invoke(player, prompt) str
+        +pop_warnings() List~str~
+    }
+
+    class AgentTimeoutError {
+        +str stdout
+        +str stderr
+    }
+
+    class AgentCliError {
+        +int returncode
+        +str stdout
+        +str stderr
     }
 
     class PromptBuilder {
@@ -122,6 +138,7 @@ classDiagram
         +append_public_log(text) void
         +save_results(state, speeches, votes, errors) void
         +save_raw_response(seq, phase, player, error_type, content) void
+        +append_warning(game_id, warning) void
     }
 
     class GameState {
@@ -192,6 +209,10 @@ classDiagram
     AgentInvoker ..|> PlayerAgent : implements
     AgentInvoker --> PromptBuilder : uses
     AgentInvoker --> AgentConfig : uses
+    AgentInvoker ..> AgentTimeoutError : raises
+    AgentInvoker ..> AgentCliError : raises
+    GameEngine ..> AgentTimeoutError : catches
+    GameEngine ..> AgentCliError : catches
 
     JsonValidator --> ValidationResult : returns
     FallbackHandler --> RandomGenerator : uses
@@ -221,8 +242,10 @@ classDiagram
 | `GameEngine` | 1試合の進行制御（役職割当・夜・昼・処刑・勝敗判定） | 4 | `scripts/game_rules.py` | 1 |
 | `PlayerAgent` | 発言・投票・占いのJSON生成インターフェース | 4, 7, 8 | `scripts/agents.py` | 1/3共通 |
 | `DryRunAgent` | `PlayerAgent`実装。固定テンプレート・シード付き乱数でJSONを生成 | 4 | `scripts/agents.py` | 1 |
-| `AgentInvoker` | `PlayerAgent`実装。一時ディレクトリで外部CLIを呼び出す | 8 | `scripts/agents.py` | 3 |
+| `AgentInvoker` | `PlayerAgent`実装。`tempfile.TemporaryDirectory`をcwdに外部CLIを`subprocess.run(shell=False)`で呼び出す。タイムアウト・非0終了を例外化する | 8 | `scripts/agents.py` | 3 |
 | `PromptBuilder` | 実CLI用プロンプト本文の組み立て | 8 | `scripts/agents.py` | 3 |
+| `AgentTimeoutError` | `subprocess.TimeoutExpired`を変換した例外。`GameEngine`が捕捉しフォールバックする | 8 | `scripts/agents.py` | 3 |
+| `AgentCliError` | 非0終了・コマンド不在（`FileNotFoundError`）等を変換した例外。`GameEngine`が捕捉しフォールバックする | 8 | `scripts/agents.py` | 3 |
 | `JsonValidator` | 応答の構文検証・内容検証 | 7 | `scripts/json_utils.py` | 1 |
 | `ValidationResult` | 検証結果（OK/NG、パース済みアクション、error_type） | 7 | `scripts/json_utils.py` | 1 |
 | `FallbackHandler` | 検証NG時のフォールバック行動決定 | 7 | `scripts/game_rules.py` | 1 |
@@ -263,6 +286,16 @@ classDiagram
 - `build_night_prompt(seer, candidates)` は夜フェーズで行動するのが常に占い師のみ（SPEC.md 9章）のため、`role`引数は不要で当初のシグネチャを維持した。
 
 `PromptBuilder`は`prompts/*.md`の「## 本文」セクション（```text ... ```で囲まれた部分のみ）を読み込み、`common_player_prompt.md` → 役職別プロンプト → フェーズ別プロンプトの順に連結し、`{{...}}`プレースホルダを置換する。置換後に`{{`が残っている場合は`ValueError`を送出し、プレースホルダの渡し漏れを実行時に検知する。
+
+### 3.5 Phase 3: `AgentInvoker`の例外設計とタイムアウト
+
+- `AgentInvoker._invoke`は`subprocess.run(shell=False, cwd=一時ディレクトリ, timeout=...)`を実行し、以下を例外に変換して呼び出し元（`GameEngine`）に伝える。
+  - `subprocess.TimeoutExpired` → `AgentTimeoutError`（`error_type=timeout`）
+  - 非0の`returncode` → `AgentCliError`（`error_type=cli`）
+  - `FileNotFoundError`（CLIコマンド自体が存在しない）・その他の起動失敗 → `AgentCliError`（`returncode=127`または`-1`）
+- `GameEngine`は夜・発言・投票の各フェーズで`AgentTimeoutError` / `AgentCliError`を捕捉し、`JsonValidator`の構文・内容エラーと同じ経路（`raw/`保存 → `results.md`記録 → `FallbackHandler`）に合流させる。これにより12章のフォールバック方針（構文・内容・タイムアウト・CLIエラーはすべて同じ扱い）をPhase 3でも維持する。
+- タイムアウト秒数は`--agent-timeout`（CLI引数、既定60秒）で指定し、`RunOptions.agent_timeout` → `AgentInvoker.__init__`まで伝播する。
+- 一時ディレクトリの削除に失敗した場合は例外にせず、`AgentInvoker.warnings`に警告文字列を積む。`GameEngine`は各呼び出し後に`pop_warnings()`で回収し、`results.md`の「警告記録」に記録する（ゲーム進行は継続する）。
 
 ---
 

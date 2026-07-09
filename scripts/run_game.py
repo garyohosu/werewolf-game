@@ -35,10 +35,11 @@ def parse_args(argv: List[str]) -> RunOptions:
     mode_group = parser.add_mutually_exclusive_group()
     mode_group.add_argument("--dry-run", action="store_true", help="run without external AI CLIs (default)")
     mode_group.add_argument(
-        "--use-real-agents", action="store_true", help="Phase 3: connect real AI CLIs (not implemented yet)"
+        "--use-real-agents", action="store_true", help="Phase 3: connect real AI CLIs"
     )
 
     parser.add_argument("--seed", type=int, default=None, help="random seed for reproducible runs")
+    parser.add_argument("--agent-timeout", type=float, default=60.0, help="timeout in seconds for each AI CLI call")
 
     args = parser.parse_args(argv)
 
@@ -46,7 +47,7 @@ def parse_args(argv: List[str]) -> RunOptions:
         parser.error("--games must be a positive integer (1 or greater)")
 
     mode = Mode.REAL_AGENTS if args.use_real_agents else Mode.DRY_RUN
-    return RunOptions(games=args.games, mode=mode, seed=args.seed)
+    return RunOptions(games=args.games, mode=mode, seed=args.seed, agent_timeout=args.agent_timeout)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -56,14 +57,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         options = parse_args(argv)
     except SystemExit as exc:
         return exc.code if isinstance(exc.code, int) else 2
-
-    if options.mode is Mode.REAL_AGENTS:
-        print(
-            "error: --use-real-agents (Phase 3 real-CLI connection) is not implemented yet. "
-            "Use --dry-run (or no flag) for Phase 1.",
-            file=sys.stderr,
-        )
-        return 1
 
     config_loader = ConfigLoader()
     try:
@@ -75,8 +68,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     rng = RandomGenerator(options.seed)
     validator = JsonValidator()
     log_writer = LogWriter(LOGS_ROOT)
-    dry_run_agent = DryRunAgent(rng)
     fallback_handler = FallbackHandler(rng)
+
+    if options.mode is Mode.DRY_RUN:
+        from agents import DryRunAgent
+        player_agent = DryRunAgent(rng)
+    else:
+        from agents import AgentInvoker
+        prompts_dir = REPO_ROOT / "prompts"
+        player_agent = AgentInvoker(agent_configs, prompts_dir, timeout=options.agent_timeout)
 
     start_game_id = log_writer.next_start_game_id()
 
@@ -85,7 +85,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         engine = GameEngine(
             agent_configs=agent_configs,
             rng=rng,
-            player_agent=dry_run_agent,
+            player_agent=player_agent,
             validator=validator,
             fallback_handler=fallback_handler,
             log_writer=log_writer,

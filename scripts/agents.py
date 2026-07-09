@@ -54,6 +54,25 @@ class ConfigLoader:
         return configs
 
 
+class AgentTimeoutError(Exception):
+    """Timeout expired during CLI agent invocation (Phase 3)."""
+
+    def __init__(self, message: str, stdout: str = "", stderr: str = "") -> None:
+        super().__init__(message)
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+class AgentCliError(Exception):
+    """CLI agent returned non-zero exit code or execution failed (Phase 3)."""
+
+    def __init__(self, message: str, returncode: int, stdout: str = "", stderr: str = "") -> None:
+        super().__init__(message)
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
 class PlayerAgent(ABC):
     """Common interface for dry-run and real-CLI response generation.
 
@@ -66,11 +85,20 @@ class PlayerAgent(ABC):
         ...
 
     @abstractmethod
-    def generate_speech(self, player: str, public_log: str) -> str:
+    def generate_speech(
+        self, player: str, role: Role, public_log: str, seer_result_summary: str = ""
+    ) -> str:
         ...
 
     @abstractmethod
-    def generate_vote(self, player: str, candidates: Sequence[str], public_log: str) -> str:
+    def generate_vote(
+        self,
+        player: str,
+        role: Role,
+        candidates: Sequence[str],
+        public_log: str,
+        seer_result_summary: str = "",
+    ) -> str:
         ...
 
 
@@ -87,7 +115,9 @@ class DryRunAgent(PlayerAgent):
             ensure_ascii=False,
         )
 
-    def generate_speech(self, player: str, public_log: str) -> str:
+    def generate_speech(
+        self, player: str, role: Role, public_log: str, seer_result_summary: str = ""
+    ) -> str:
         return json.dumps(
             {
                 "speech": f"（dry-run）{player}の発言です。",
@@ -96,7 +126,14 @@ class DryRunAgent(PlayerAgent):
             ensure_ascii=False,
         )
 
-    def generate_vote(self, player: str, candidates: Sequence[str], public_log: str) -> str:
+    def generate_vote(
+        self,
+        player: str,
+        role: Role,
+        candidates: Sequence[str],
+        public_log: str,
+        seer_result_summary: str = "",
+    ) -> str:
         target = self._rng.choice(candidates)
         return json.dumps(
             {"vote": target, "reason": "（dry-run）シード付き乱数で選択しました。"},
@@ -105,25 +142,113 @@ class DryRunAgent(PlayerAgent):
 
 
 class AgentInvoker(PlayerAgent):
-    """Phase 3 real-CLI response generator.
+    """Phase 3 real-CLI response generator."""
 
-    Not implemented in Phase 1 (SPEC.md 20章 Phase 3). run_game.py rejects
-    --use-real-agents before this class would ever be constructed; it exists
-    here so the PlayerAgent interface and CLASS.md design are already in
-    place for Phase 3.
-    """
+    def __init__(
+        self,
+        agent_configs: Sequence[AgentConfig],
+        prompts_dir: Path,
+        timeout: float = 60.0,
+    ) -> None:
+        self._configs = {config.name: config for config in agent_configs}
+        player_names = [config.name for config in agent_configs]
+        self._prompt_builder = PromptBuilder(prompts_dir, player_names)
+        self._timeout = timeout
+        self.warnings: List[str] = []
 
-    def __init__(self, agent_config: AgentConfig) -> None:
-        self._agent_config = agent_config
+    def pop_warnings(self) -> List[str]:
+        w = list(self.warnings)
+        self.warnings.clear()
+        return w
 
     def generate_night_action(self, seer: str, candidates: Sequence[str]) -> str:
-        raise NotImplementedError("Phase 3 (real-agents) is not implemented yet")
+        prompt = self._prompt_builder.build_night_prompt(seer, candidates)
+        return self._invoke(seer, prompt)
 
-    def generate_speech(self, player: str, public_log: str) -> str:
-        raise NotImplementedError("Phase 3 (real-agents) is not implemented yet")
+    def generate_speech(
+        self, player: str, role: Role, public_log: str, seer_result_summary: str = ""
+    ) -> str:
+        prompt = self._prompt_builder.build_speech_prompt(player, role, public_log, seer_result_summary)
+        return self._invoke(player, prompt)
 
-    def generate_vote(self, player: str, candidates: Sequence[str], public_log: str) -> str:
-        raise NotImplementedError("Phase 3 (real-agents) is not implemented yet")
+    def generate_vote(
+        self,
+        player: str,
+        role: Role,
+        candidates: Sequence[str],
+        public_log: str,
+        seer_result_summary: str = "",
+    ) -> str:
+        prompt = self._prompt_builder.build_vote_prompt(player, role, candidates, public_log, seer_result_summary)
+        return self._invoke(player, prompt)
+
+    def _invoke(self, player: str, prompt: str) -> str:
+        import subprocess
+        import tempfile
+
+        config = self._configs[player]
+        cmd = [config.command] + config.args
+
+        stdin_input = None
+        if config.prompt_mode == "arg":
+            cmd.append(prompt)
+        elif config.prompt_mode == "stdin":
+            stdin_input = prompt
+
+        temp_dir = tempfile.TemporaryDirectory()
+        try:
+            cwd = temp_dir.name
+            try:
+                res = subprocess.run(
+                    cmd,
+                    input=stdin_input,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    shell=False,
+                    cwd=cwd,
+                    timeout=self._timeout,
+                )
+            except subprocess.TimeoutExpired as exc:
+                stdout = exc.stdout.decode("utf-8", errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
+                stderr = exc.stderr.decode("utf-8", errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or "")
+                raise AgentTimeoutError(
+                    f"{player}: CLI execution timed out after {self._timeout}s",
+                    stdout=stdout,
+                    stderr=stderr,
+                ) from exc
+            except FileNotFoundError as exc:
+                raise AgentCliError(
+                    f"{player}: CLI command not found: {config.command}",
+                    returncode=127,
+                    stdout="",
+                    stderr=str(exc),
+                ) from exc
+            except Exception as exc:
+                raise AgentCliError(
+                    f"{player}: CLI execution failed: {exc}",
+                    returncode=-1,
+                    stdout="",
+                    stderr=str(exc),
+                ) from exc
+
+            if res.returncode != 0:
+                raise AgentCliError(
+                    f"{player}: CLI returned non-zero exit code {res.returncode}",
+                    returncode=res.returncode,
+                    stdout=res.stdout or "",
+                    stderr=res.stderr or "",
+                )
+
+            return res.stdout or ""
+        finally:
+            try:
+                temp_dir.cleanup()
+            except Exception as exc:
+                self.warnings.append(
+                    f"Warning: Failed to delete temporary directory {temp_dir.name}: {exc}"
+                )
 
 
 _ROLE_PROMPT_FILES: Dict[Role, str] = {

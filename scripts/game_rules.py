@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Sequence
 
-from agents import PlayerAgent
+from agents import PlayerAgent, AgentTimeoutError, AgentCliError
 from json_utils import JsonValidator
 from log_writer import LogWriter
 from models import (
@@ -43,8 +43,7 @@ class FallbackHandler:
 class GameEngine:
     """Runs a single One Night Werewolf game from role assignment to results."""
 
-    def __init__(
-        self,
+    def __init__(self,
         agent_configs: List[AgentConfig],
         rng: RandomGenerator,
         player_agent: PlayerAgent,
@@ -80,7 +79,7 @@ class GameEngine:
         state.phase = PhaseValue.VOTE
         self._log.save_game_state(game_id, state)
 
-        votes = self._run_vote_round(game_id, speeches)
+        votes = self._run_vote_round(game_id, state, speeches)
 
         executed = self._determine_execution(votes)
         winner = self._determine_winner(state, executed)
@@ -102,21 +101,41 @@ class GameEngine:
         for name, role in zip(self._player_names, shuffled):
             state.players[name] = PlayerState(role=role)
 
+    def _collect_warnings(self, game_id: int) -> None:
+        if hasattr(self._agent, "pop_warnings"):
+            warnings = self._agent.pop_warnings()
+            for w in warnings:
+                self._log.append_warning(game_id, w)
+
     def _run_night_phase(self, game_id: int, state: GameState) -> None:
         seer = next(name for name, player in state.players.items() if player.role == Role.SEER)
         candidates = [name for name in self._player_names if name != seer]
 
-        raw = self._agent.generate_night_action(seer, candidates)
-        result = self._validator.validate(raw, "night", seer, candidates)
+        try:
+            raw = self._agent.generate_night_action(seer, candidates)
+            result = self._validator.validate(raw, "night", seer, candidates)
 
-        if result.ok:
-            target = result.action["target"]
-        else:
+            if result.ok:
+                target = result.action["target"]
+            else:
+                seq = self._next_seq()
+                self._log.save_raw_response(game_id, seq, "night", seer, result.error_type, raw or "")
+                self._log.record_error(game_id, seq, "night", seer, result.error_type)
+                target = self._fallback.decide_target(candidates)
+        except AgentTimeoutError as exc:
             seq = self._next_seq()
-            self._log.save_raw_response(game_id, seq, "night", seer, result.error_type, raw)
-            self._log.record_error(game_id, seq, "night", seer, result.error_type)
+            err_info = f"Error: {exc}\nStdout: {exc.stdout}\nStderr: {exc.stderr}"
+            self._log.save_raw_response(game_id, seq, "night", seer, "timeout", err_info)
+            self._log.record_error(game_id, seq, "night", seer, "timeout")
+            target = self._fallback.decide_target(candidates)
+        except AgentCliError as exc:
+            seq = self._next_seq()
+            err_info = f"Error: {exc}\nExitCode: {exc.returncode}\nStdout: {exc.stdout}\nStderr: {exc.stderr}"
+            self._log.save_raw_response(game_id, seq, "night", seer, "cli", err_info)
+            self._log.record_error(game_id, seq, "night", seer, "cli")
             target = self._fallback.decide_target(candidates)
 
+        self._collect_warnings(game_id)
         role = state.players[target].role
         seer_result_value = "werewolf" if role == Role.WEREWOLF else "human"
         state.seer_result = SeerResult(seer=seer, target=target, result=seer_result_value)
@@ -125,48 +144,94 @@ class GameEngine:
         speeches: List[SpeechEntry] = []
         for player in self._player_names:
             public_log_so_far = "\n".join(f"{e.player}: {e.speech}" for e in speeches)
-            raw = self._agent.generate_speech(player, public_log_so_far)
-            result = self._validator.validate(raw, "speech", player, [])
+            role = state.players[player].role
+            seer_result_summary = ""
+            if role == Role.SEER and state.seer_result is not None:
+                seer_result_summary = f"あなたの占い結果: {state.seer_result.target}は{state.seer_result.result}でした。"
 
-            if result.ok:
-                entry = SpeechEntry(
-                    player=player, speech=result.action["speech"], reason=result.action["reason"]
-                )
-            else:
+            try:
+                raw = self._agent.generate_speech(player, role, public_log_so_far, seer_result_summary)
+                result = self._validator.validate(raw, "speech", player, [])
+
+                if result.ok:
+                    entry = SpeechEntry(
+                        player=player, speech=result.action["speech"], reason=result.action["reason"]
+                    )
+                else:
+                    seq = self._next_seq()
+                    self._log.save_raw_response(game_id, seq, "speech", player, result.error_type, raw or "")
+                    self._log.record_error(game_id, seq, "speech", player, result.error_type)
+                    entry = SpeechEntry(
+                        player=player, speech=self._fallback.decide_speech(), reason=None, failed=True
+                    )
+            except AgentTimeoutError as exc:
                 seq = self._next_seq()
-                self._log.save_raw_response(game_id, seq, "speech", player, result.error_type, raw)
-                self._log.record_error(game_id, seq, "speech", player, result.error_type)
+                err_info = f"Error: {exc}\nStdout: {exc.stdout}\nStderr: {exc.stderr}"
+                self._log.save_raw_response(game_id, seq, "speech", player, "timeout", err_info)
+                self._log.record_error(game_id, seq, "speech", player, "timeout")
+                entry = SpeechEntry(
+                    player=player, speech=self._fallback.decide_speech(), reason=None, failed=True
+                )
+            except AgentCliError as exc:
+                seq = self._next_seq()
+                err_info = f"Error: {exc}\nExitCode: {exc.returncode}\nStdout: {exc.stdout}\nStderr: {exc.stderr}"
+                self._log.save_raw_response(game_id, seq, "speech", player, "cli", err_info)
+                self._log.record_error(game_id, seq, "speech", player, "cli")
                 entry = SpeechEntry(
                     player=player, speech=self._fallback.decide_speech(), reason=None, failed=True
                 )
 
+            self._collect_warnings(game_id)
             speeches.append(entry)
             self._log.append_speech(game_id, entry)
 
         return speeches
 
-    def _run_vote_round(self, game_id: int, speeches: List[SpeechEntry]) -> List[VoteEntry]:
+    def _run_vote_round(self, game_id: int, state: GameState, speeches: List[SpeechEntry]) -> List[VoteEntry]:
         # 発言ラウンド終了時点の公開ログのスナップショットを全員に渡す（10.2章）。
         frozen_public_log = "\n".join(f"{e.player}: {e.speech}" for e in speeches)
         votes: List[VoteEntry] = []
 
         for player in self._player_names:
             candidates = [name for name in self._player_names if name != player]
-            raw = self._agent.generate_vote(player, candidates, frozen_public_log)
-            result = self._validator.validate(raw, "vote", player, candidates)
+            role = state.players[player].role
+            seer_result_summary = ""
+            if role == Role.SEER and state.seer_result is not None:
+                seer_result_summary = f"あなたの占い結果: {state.seer_result.target}は{state.seer_result.result}でした。"
 
-            if result.ok:
-                entry = VoteEntry(
-                    player=player, vote=result.action["vote"], reason=result.action["reason"]
-                )
-            else:
+            try:
+                raw = self._agent.generate_vote(player, role, candidates, frozen_public_log, seer_result_summary)
+                result = self._validator.validate(raw, "vote", player, candidates)
+
+                if result.ok:
+                    entry = VoteEntry(
+                        player=player, vote=result.action["vote"], reason=result.action["reason"]
+                    )
+                else:
+                    seq = self._next_seq()
+                    self._log.save_raw_response(game_id, seq, "vote", player, result.error_type, raw or "")
+                    self._log.record_error(game_id, seq, "vote", player, result.error_type)
+                    entry = VoteEntry(
+                        player=player, vote=self._fallback.decide_target(candidates), reason=None, failed=True
+                    )
+            except AgentTimeoutError as exc:
                 seq = self._next_seq()
-                self._log.save_raw_response(game_id, seq, "vote", player, result.error_type, raw)
-                self._log.record_error(game_id, seq, "vote", player, result.error_type)
+                err_info = f"Error: {exc}\nStdout: {exc.stdout}\nStderr: {exc.stderr}"
+                self._log.save_raw_response(game_id, seq, "vote", player, "timeout", err_info)
+                self._log.record_error(game_id, seq, "vote", player, "timeout")
+                entry = VoteEntry(
+                    player=player, vote=self._fallback.decide_target(candidates), reason=None, failed=True
+                )
+            except AgentCliError as exc:
+                seq = self._next_seq()
+                err_info = f"Error: {exc}\nExitCode: {exc.returncode}\nStdout: {exc.stdout}\nStderr: {exc.stderr}"
+                self._log.save_raw_response(game_id, seq, "vote", player, "cli", err_info)
+                self._log.record_error(game_id, seq, "vote", player, "cli")
                 entry = VoteEntry(
                     player=player, vote=self._fallback.decide_target(candidates), reason=None, failed=True
                 )
 
+            self._collect_warnings(game_id)
             votes.append(entry)
 
         # 全員分を内部収集してから一括公開する（10.2章）。

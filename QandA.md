@@ -2,13 +2,16 @@
 
 SPEC.md レビューで見つかった不明点・矛盾点。実装（Phase 1以降）をブロックしうる順に記載。
 
-**状態（2026-07-09 CLASS.md作成後）:**
+**状態（2026-07-09 Phase 3 AgentInvoker実装後）:**
 - Q1〜Q21: 解決済み（v0.2 / v0.3 / v0.4 / v0.5 反映済み）
 - Q22〜Q23: 方針決定済み・要確認（USECASE作成時）
 - Q24〜Q29: 解決済み（USECASE.mdを修正し、Codex CLI再レビューでAPPROVED）
-- Q30〜Q40: 解決済み（SEQUENCE.mdに反映。Q33の決定によりQ30・Q31は前提ごと解消）
-- Q41: 方針決定済み・要確認（CLASS.md作成時）
-- セクション番号は v0.6-draft / USECASE.md / SEQUENCE.md / CLASS.md 準拠
+- Q30〜Q40: 解決済み（Q33の決定によりQ30・Q31は前提ごと解消）
+- Q41: 解決済み（ユーザー確定。CLASS.md 3.4章参照）
+- Q42〜Q48: 解決済み（TESTCASE.md反映）
+- Q49〜Q50: 解決済み（Phase 2.5 PromptBuilder実装で反映）
+- Q51〜Q54: 解決済み（Phase 3 AgentInvoker実装で反映）
+- セクション番号は v0.9-draft / USECASE.md / SEQUENCE.md / CLASS.md / TESTCASE.md 準拠
 
 ---
 
@@ -467,7 +470,7 @@ SPEC.md v0.5-draftからUSECASE.mdをMermaid `flowchart` で作成した。SPEC.
   - それとも利便機能として正式採用し、SPEC.mdにも保存形式・更新タイミングを追加するか。
 - **補足**: 前者を選ぶ場合、Q30・Q31は前提ごと解消する。後者を選ぶ場合にのみQ30・Q31の判断が必要。
 - **提案**: Phase 1ではSPECどおり試合ディレクトリ配下だけに保存し、ルート直下の最新ファイルは作成しない。
-- **決定した方針**: Phase 1ではルート直下の `game_state.json` / `public_log.md` / `results.md` は作成せず、`logs/games/game_XXXX/` 配下だけに保存する。SEQUENCE.mdの最新ショートカット更新は削除する。
+- **決定した方針**: Phase 1・Phase 3ともルート直下の `game_state.json` / `public_log.md` / `results.md` は作成せず、`logs/games/game_XXXX/` 配下だけに保存する。SEQUENCE.mdの最新ショートカット更新は削除する。
 
 ## Q34. dry-run発言JSONの `reason` の値 [解決済み → SPEC.md / SEQUENCE.mdに反映] **重大度: 高**
 - **該当**: SEQUENCE.md 4章 (L159〜160)、SPEC.md 11.1章・15.1章
@@ -624,3 +627,33 @@ Q30〜Q40はすべて解決し、SPEC.mdおよびSEQUENCE.mdへ反映済み。Ph
 
 - **問題**: `common_player_prompt.md`の出力ルール説明文が「Markdownのコードフェンス（```json のようなもの）で囲まないでください。」となっており、禁止しているはずのコードフェンス記法自体を本文中に literal に含んでいた。これにより (1) `PromptBuilder`のテスト（`assert "```" not in prompt`）が失敗し、(2) AIへの指示として自己矛盾する内容になっていた。
 - **決定した方針**: 該当行を「Markdownのコードフェンスで出力を囲まないでください。」に修正し、具体例の埋め込みをやめた。`tests/test_prompt_builder.py::test_real_prompts_do_not_contain_markdown_code_fences_in_body`で再発防止を検証する。
+
+---
+
+## Phase 3: AgentInvoker実装（2026-07-09）で判断した設計方針
+
+`PromptBuilder` と `AgentInvoker` を組み合わせて `--use-real-agents` モードをサポートした際に発生した問題と、実装上の決定方針を記録する。
+
+### Q51. Windows環境での subprocess.run デコードエラー (UnicodeDecodeError) 回避策 [解決済み → 実装に反映] **重大度: 高**
+- **問題**: Windows環境では `text=True` を指定すると既定で CP932 (Shift-JIS) で標準出力をデコードしようとするが、AI応答やCLIエラーに UTF-8 文字が含まれていると `UnicodeDecodeError` が発生してゲーム全体がクラッシュする。
+- **決定した方針**: `subprocess.run` 時に `encoding="utf-8"` および `errors="replace"` を明示的に指定し、文字化けや不正バイトを `\ufffd` に置換して文字列として安全にデコードする。
+
+### Q52. 生応答 (raw) が NoneType になることによる TypeError 回避策 [解決済み → 実装に反映] **重大度: 中**
+- **問題**: 例外発生時やデコード失敗時に `raw` 応答が `None` になる場合があり、そのまま `save_raw_response` を呼ぶと `TypeError: data must be str, not NoneType` が発生する。
+- **決定した方針**: `save_raw_response` の呼び出し時および `AgentInvoker` の戻り値で `raw or ""` と空文字列にフォールバックさせ、`TypeError` を防止する。
+
+### Q53. 一時ディレクトリの削除失敗時の挙動 [解決済み → 実装に反映] **重大度: 中**
+- **問題**: 一時ディレクトリの削除（cleanup）に失敗した場合にゲーム進行を壊さないようにする具体的な実装。
+- **決定した方針**: `AgentInvoker` 内で一時ディレクトリの削除エラーが発生した場合は例外を無視（警告の `warnings.warn` および `warnings` リストへの追加）し、ゲームエンジンが試合終了時に `pop_warnings()` で収集して `results.md` の `## 警告記録` 欄に安全に書き出す。
+
+### Q54. CLI未導入環境での挙動 [解決済み → 実装に反映] **重大度: 高**
+- **問題**: 環境に `claude` などのコマンドが全く存在しない場合の挙動。
+- **決定した方針**: `FileNotFoundError` を `AgentCliError` （returncode 127）としてキャッチし、安全に `cli` エラーとして `raw/{seq}_{phase}_{player}_cli.txt` 保存＋フォールバック（ダミー応答）で進行させ、ゲームを完走させる。
+
+### Q55. ルート直下ショートカット再導入案 [解決済み → 採用せず、Q33を維持] **重大度: 中**
+- **問題**: v0.6-draft（Q33）では「Phase 1ではルート直下に`game_state.json`/`public_log.md`/`results.md`のコピーを作成しない」と確定していたが、Phase 3作業差分で実体コピー処理と`.gitignore`除外が追加され、Q33と実装が矛盾していた。
+- **決定した方針**:
+  - 再導入案は採用せず、Q33の「ルート直下3ファイルを作成しない」方針をPhase 3でも維持する。
+  - `LogWriter` / `GameEngine`からルートコピー処理を削除し、保存先を`logs/games/game_XXXX/`配下だけに戻す。
+  - ルート直下3ファイルを`.gitignore`へ追加せず、誤生成が`git status`で検出できるようにする。
+- **注記**: Q30・Q31はQ33により引き続き前提消滅として扱う。

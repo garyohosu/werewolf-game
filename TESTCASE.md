@@ -2,15 +2,15 @@
 
 ## Project: AI Multi-Agent Werewolf Game (One Night Werewolf)
 
-Version: 0.1-draft  
-Based on: `CLASS.md` / `SPEC.md` v0.6-draft / `SEQUENCE.md` / `USECASE.md`  
-Primary target: Phase 1 dry-run implementation
+Version: 0.2-draft
+Based on: `CLASS.md` / `SPEC.md` v0.9-draft / `SEQUENCE.md` / `USECASE.md`
+Primary target: Phase 1 dry-run implementation, Phase 3 AgentInvoker
 
 ---
 
 ## 1. 目的・方針
 
-`CLASS.md`のクラス責務に対するPhase 1の単体・結合・E2Eテストを定義する。Phase 3専用の`AgentInvoker`と`PromptBuilder`は将来テストの観点だけを記載する。
+`CLASS.md`のクラス責務に対するPhase 1・Phase 3の単体・結合テストを定義する。`AgentInvoker`と`PromptBuilder`は実装済みで、`tests/test_agents.py`（`AgentInvoker`単体、`subprocess.run`をモック）・`tests/test_prompt_builder.py`（`PromptBuilder`）・`tests/test_game_rules.py`（`GameEngine`とのフォールバック結合、`AgentInvoker`を通したE2E相当の結合）でカバーする。実CLI（claude/codex/grok/agy）を用いた本当のE2Eは環境依存のため任意（8章参照）。
 
 - Unit: 引数検証、乱数、dry-run応答、JSON検証、フォールバック、処刑・勝敗判定
 - Integration: `GameEngine`、`PlayerAgent`、`LogWriter`を一時ディレクトリ上で結合
@@ -117,7 +117,7 @@ Primary target: Phase 1 dry-run implementation
 | TC-LOG-007 | results | 役職・発言・投票・占い・勝敗・エラーあり |
 | TC-LOG-008 | 1件目の不正応答 | `raw/01_{phase}_{player}_{error}.txt`へ生応答保存 |
 | TC-LOG-009 | 複数エラー | 上書きせず発生順連番 |
-| TC-LOG-010 | Phase 1 | ルート直下に3状態ファイルを作らない |
+| TC-LOG-010 | Phase 1・Phase 3 | ルート直下に3状態ファイルを作らない |
 | TC-LOG-011 | 既存試合あり | 上書きしない |
 
 ---
@@ -137,16 +137,27 @@ Primary target: Phase 1 dry-run implementation
 
 ---
 
-## 8. Phase 3向け保留観点
+## 8. Phase 3: AgentInvoker（実装済み・subprocessモック）
 
-- 一時ディレクトリ、`subprocess.run(shell=False)`、prompt_modeのarg/stdin分岐
-- timeout/CLI異常終了のraw保存とフォールバック
-- 呼出終了後の一時ディレクトリ削除
-- 同一seedかつ同一乱数呼出列の場合だけエンジン内選択が一致
-- 外部AIの発言・投票・応答成否・試合結果全体は再現対象外
+| ID | 条件・操作 | 期待結果 |
+|---|---|---|
+| TC-INV-001 | `prompt_mode="arg"` | `subprocess.run`の第1引数（コマンド配列）末尾にプロンプト文字列が1要素として追加される |
+| TC-INV-002 | `prompt_mode="stdin"` | `input=`にプロンプト文字列が渡り、コマンド配列にプロンプトを含めない |
+| TC-INV-003 | 全呼び出し | `shell=False`で呼ばれる |
+| TC-INV-004 | 全呼び出し | `cwd`が`tempfile.TemporaryDirectory()`配下（リポジトリルートではない） |
+| TC-INV-005 | `AgentInvoker(..., timeout=X)` | `subprocess.run`に`timeout=X`が渡る（未指定時は60秒） |
+| TC-INV-006 | `returncode != 0` | `AgentCliError`（`returncode`/`stdout`/`stderr`を保持） |
+| TC-INV-007 | `subprocess.TimeoutExpired` | `AgentTimeoutError`（部分`stdout`/`stderr`を保持） |
+| TC-INV-008 | `FileNotFoundError`（CLI未導入） | `AgentCliError(returncode=127)`。pytestはCLI不在でも失敗しない（subprocessをモック） |
+| TC-INV-009 | 正常stdout | `GameEngine`の既存フロー（`JsonValidator`→採用）で処理される |
+| TC-INV-010 | 不正stdout | `raw/`保存 + `FallbackHandler`（`JsonValidator`と同じ経路） |
+| TC-INV-011 | 一時ディレクトリ削除失敗 | 例外にせず`warnings`に積み、`GameEngine`が`results.md`の「警告記録」に記録。ゲーム進行は継続 |
+| TC-GME-012 | 夜フェーズで`AgentTimeoutError` | `raw/01_night_{player}_timeout.txt`保存、フォールバック占い、ゲーム完走 |
+| TC-GME-013 | 投票フェーズで`AgentCliError`（全員） | 4件の`raw/..._vote_..._cli.txt`保存、`results.md`に`error_type=cli`が4件、ゲーム完走 |
+| TC-E2E-006 | `AgentInvoker`を通した1試合（`subprocess.run`モックで全応答が正常JSON） | `raw/`が空、`results.md`に「エラー記録」なし、9回のCLI呼び出し（夜1+発言4+投票4）すべて`shell=False`・非リポジトリルートcwd |
 
 ---
 
 ## 9. 実装開始判定
 
-Q42〜Q48は確定済み。pytest、共有RNGと依存注入、`tmp_path`、代表seed回帰、内容ベースのMarkdown検証、agents設定検証を用いてPhase 1テストを実装する。
+Q42〜Q54は確定済み。pytest、共有RNGと依存注入、`tmp_path`、代表seed回帰、内容ベースのMarkdown検証、agents設定検証、`subprocess.run`モックによるPhase 3テストを用いてPhase 1・Phase 3テストを実装済み。Q55のルートショートカット再導入案は採用せず、TC-LOG-010でPhase 1・Phase 3ともルート直下3ファイルが作られないことを検証する。

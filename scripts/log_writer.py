@@ -21,6 +21,7 @@ class LogWriter:
         self._games_root = logs_root
         self._games_root.mkdir(parents=True, exist_ok=True)
         self._errors: Dict[int, List[ErrorRecord]] = {}
+        self._warnings: Dict[int, List[str]] = {}
 
     def next_start_game_id(self) -> int:
         """Existing max game_XXXX + 1, or 1 if none exist (14章)."""
@@ -45,6 +46,7 @@ class LogWriter:
         game_dir.mkdir(parents=True)
         (game_dir / "raw").mkdir()
         self._errors[game_id] = []
+        self._warnings[game_id] = []
 
     def init_public_log(self, game_id: int) -> None:
         path = self._game_dir(game_id) / "public_log.md"
@@ -107,6 +109,9 @@ class LogWriter:
             ErrorRecord(seq=seq, phase=phase, player=player, error_type=error_type)
         )
 
+    def append_warning(self, game_id: int, warning: str) -> None:
+        self._warnings.setdefault(game_id, []).append(warning)
+
     def save_results(
         self,
         game_id: int,
@@ -155,6 +160,13 @@ class LogWriter:
                     f"- seq={err.seq} phase={err.phase} player={err.player} "
                     f"error_type={err.error_type}"
                 )
+            lines.append("")
+
+        warnings = self._warnings.get(game_id, [])
+        if warnings:
+            lines.append("## 警告記録")
+            for w in warnings:
+                lines.append(f"- {w}")
             lines.append("")
 
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")

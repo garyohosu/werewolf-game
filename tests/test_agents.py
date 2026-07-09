@@ -1,12 +1,15 @@
 import json
+import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import patch, MagicMock
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
-from agents import ConfigLoader  # noqa: E402
+from agents import ConfigLoader, AgentInvoker, AgentCliError, AgentTimeoutError  # noqa: E402
+from models import AgentConfig, Role  # noqa: E402
 
 
 def _valid_config() -> dict:
@@ -63,3 +66,118 @@ def test_duplicate_player_name_is_rejected(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError, match="duplicate player name"):
         ConfigLoader().load(path)
+
+
+def _write_prompt(path: Path, body: str) -> None:
+    path.write_text(
+        "# stub\n\n## 用途\n\nstub\n\n## 本文\n\n```text\n" + body + "\n```\n",
+        encoding="utf-8",
+    )
+
+
+def _prepare_prompts(tmp_path: Path) -> Path:
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir(exist_ok=True)
+    _write_prompt(prompts_dir / "common_player_prompt.md", "COMMON {{player_name}}")
+    _write_prompt(prompts_dir / "villager_prompt.md", "VILLAGER {{player_name}}")
+    _write_prompt(prompts_dir / "seer_prompt.md", "SEER {{player_name}}")
+    _write_prompt(prompts_dir / "werewolf_prompt.md", "WEREWOLF {{player_name}}")
+    _write_prompt(prompts_dir / "night_seer_prompt.md", "NIGHT {{player_name}} candidates={{candidates}}")
+    _write_prompt(prompts_dir / "speech_prompt.md", "SPEECH {{player_name}} log={{public_log}} seer={{seer_result_summary}}")
+    _write_prompt(prompts_dir / "vote_prompt.md", "VOTE {{player_name}} log={{public_log}} candidates={{candidates}} seer={{seer_result_summary}}")
+    return prompts_dir
+
+
+def test_agent_invoker_arg_mode(tmp_path: Path) -> None:
+    prompts_dir = _prepare_prompts(tmp_path)
+    config = AgentConfig(name="Claude", command="claude", args=["-p"], prompt_mode="arg")
+    invoker = AgentInvoker([config], prompts_dir, timeout=12.5)
+
+    mock_res = MagicMock()
+    mock_res.returncode = 0
+    mock_res.stdout = '{"target": "Codex"}'
+    mock_res.stderr = ""
+
+    with patch("subprocess.run", return_value=mock_res) as mock_run:
+        res = invoker.generate_night_action("Claude", ["Codex", "Grok"])
+        assert res == '{"target": "Codex"}'
+
+        mock_run.assert_called_once()
+        args, kwargs = mock_run.call_args
+        cmd = args[0]
+        assert cmd[:-1] == ["claude", "-p"]
+        assert "COMMON Claude" in cmd[-1]
+        assert kwargs["input"] is None
+        assert kwargs["shell"] is False
+        assert kwargs["timeout"] == 12.5
+        import tempfile
+        assert Path(kwargs["cwd"]).parent == Path(tempfile.gettempdir())
+
+
+def test_agent_invoker_stdin_mode(tmp_path: Path) -> None:
+    prompts_dir = _prepare_prompts(tmp_path)
+    config = AgentConfig(name="Codex", command="codex", args=["exec"], prompt_mode="stdin")
+    invoker = AgentInvoker([config], prompts_dir, timeout=5.0)
+
+    mock_res = MagicMock()
+    mock_res.returncode = 0
+    mock_res.stdout = '{"speech": "hello"}'
+    mock_res.stderr = ""
+
+    with patch("subprocess.run", return_value=mock_res) as mock_run:
+        res = invoker.generate_speech("Codex", Role.VILLAGER, "public log", "seer summary")
+        assert res == '{"speech": "hello"}'
+
+        mock_run.assert_called_once()
+        args, kwargs = mock_run.call_args
+        cmd = args[0]
+        assert cmd == ["codex", "exec"]
+        assert "COMMON Codex" in kwargs["input"]
+        assert "seer=seer summary" in kwargs["input"]
+        assert kwargs["shell"] is False
+        assert kwargs["timeout"] == 5.0
+
+
+def test_agent_invoker_cli_error(tmp_path: Path) -> None:
+    prompts_dir = _prepare_prompts(tmp_path)
+    config = AgentConfig(name="Grok", command="grok", args=[], prompt_mode="arg")
+    invoker = AgentInvoker([config], prompts_dir)
+
+    mock_res = MagicMock()
+    mock_res.returncode = 1
+    mock_res.stdout = ""
+    mock_res.stderr = "some stderr error description"
+
+    with patch("subprocess.run", return_value=mock_res):
+        with pytest.raises(AgentCliError) as exc_info:
+            invoker.generate_vote("Grok", Role.WEREWOLF, ["Claude", "Codex"], "log")
+
+        assert exc_info.value.returncode == 1
+        assert "some stderr error description" in exc_info.value.stderr
+
+
+def test_agent_invoker_timeout_error(tmp_path: Path) -> None:
+    prompts_dir = _prepare_prompts(tmp_path)
+    config = AgentConfig(name="agy", command="agy", args=[], prompt_mode="arg")
+    invoker = AgentInvoker([config], prompts_dir, timeout=10.0)
+
+    with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(["agy"], timeout=10.0, output=b"partial stdout", stderr=b"partial stderr")):
+        with pytest.raises(AgentTimeoutError) as exc_info:
+            invoker.generate_speech("agy", Role.VILLAGER, "log")
+
+        assert "timed out" in str(exc_info.value)
+        assert exc_info.value.stdout == "partial stdout"
+        assert exc_info.value.stderr == "partial stderr"
+
+
+def test_agent_invoker_command_not_found(tmp_path: Path) -> None:
+    prompts_dir = _prepare_prompts(tmp_path)
+    config = AgentConfig(name="Grok", command="non-existent-cmd", args=[], prompt_mode="arg")
+    invoker = AgentInvoker([config], prompts_dir)
+
+    with patch("subprocess.run", side_effect=FileNotFoundError("No such file")):
+        with pytest.raises(AgentCliError) as exc_info:
+            invoker.generate_speech("Grok", Role.VILLAGER, "log")
+
+        assert exc_info.value.returncode == 127
+        assert "not found" in str(exc_info.value)

@@ -33,6 +33,7 @@ class RunOptions:
     games: int
     mode: Mode
     seed: Optional[int]
+    agent_timeout: float = 60.0
 
 
 @dataclass

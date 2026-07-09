@@ -2,9 +2,9 @@
 
 ## Project: AI Multi-Agent Werewolf Game (One Night Werewolf)
 
-Version: 0.1-draft  
-Based on: `SPEC.md` v0.5-draft / `USECASE.md` / `QandA.md`  
-Primary target: Phase 1 dry-run implementation
+Version: 0.2-draft
+Based on: `SPEC.md` v0.9-draft / `USECASE.md` / `QandA.md`
+Primary target: Phase 1 dry-run and Phase 3 AgentInvoker implementation
 
 ---
 
@@ -484,7 +484,7 @@ sequenceDiagram
 
 `phase` の許容値は `setup` → `night` → `speech` → `vote` → `finished` の5つとし、各処理の開始前に更新する（QandA Q37）。
 
-**ルート直下への複製について（QandA Q30・Q31・Q33）**: Phase 1では `SPEC.md` 14章の定義どおり、`logs/games/game_XXXX/` 配下にのみ保存する。ルート直下へのコピー、シンボリックリンク、ショートカットは作成しない。これによりQ30・Q31は前提ごと解消する。
+**ルート直下への複製について（QandA Q30・Q31・Q33）**: Phase 1・Phase 3とも `SPEC.md` 14章の定義どおり、`logs/games/game_XXXX/` 配下にのみ保存する。ルート直下へのコピー、シンボリックリンク、ショートカットは作成しない。これによりQ30・Q31は前提ごと解消する。
 
 ---
 
@@ -507,7 +507,7 @@ sequenceDiagram
 
 本書自体のレビューで指摘されたQ30〜Q40は、以下のとおり本書に反映済み。
 
-- Q30・Q31・Q33: Phase 1ではルート直下の3ファイルを作成せず、試合ディレクトリ配下だけに保存する（9章参照）。これによりQ30・Q31は前提ごと解消。
+- Q30・Q31・Q33: Phase 1・Phase 3ともルート直下の3ファイルを作成せず、試合ディレクトリ配下だけに保存する（9章参照）。これによりQ30・Q31は前提ごと解消。
 - Q32: SPEC.mdバージョン表記の不整合はなし（解決済み・確認のみ）。
 - Q34: dry-run発言JSONに`reason`を追加し、必須キー欠落によるフォールバック誤発火を防止した（4章参照）。
 - Q35: `logs/games/game_XXXX/`の作成をループ内・試合ごとに移した（4章・5章参照）。

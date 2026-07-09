@@ -2,9 +2,9 @@
 
 ## Project: AI Multi-Agent Werewolf Game (One Night Werewolf)
 
-Version: 0.8-draft
+Version: 0.9-draft
 Repository: `garyohosu/werewolf-game`  
-Status: Phase 1 dry-run implemented (APPROVED); Phase 2 prompt templates added; Phase 2.5 PromptBuilder implemented
+Status: Phase 3 AgentInvoker implemented; pre-commit verification complete
 
 ---
 
@@ -33,7 +33,7 @@ Status: Phase 1 dry-run implemented (APPROVED); Phase 2 prompt templates added; 
   - `game_state.json` の `executed` と `winner` の型・許容値・勝敗との対応を確定（17.3章）。
   - 複数試合間の状態を完全に独立させつつ、起動時に初期化した単一の乱数生成器を全試合で継続利用することを確定（16.5章）。
 - v0.6-draft (2026-07-09): `SEQUENCE.md` 作成・レビューで判明した `QandA.md` Q30〜Q40 についての方針を確定・反映。
-  - ルート直下への `game_state.json` / `public_log.md` / `results.md` のコピー・シンボリックリンク・ショートカットは、Phase 1では作成しないことを明記（14章）。
+  - ルート直下への `game_state.json` / `public_log.md` / `results.md` のコピー・シンボリックリンク・ショートカットは、Phase 1・Phase 3とも作成しないことを明記（14章）。
   - dry-run発言JSONに `reason` を必須で含めることを明記（15.1章。省略すると必須キー欠落で全発言がフォールバック扱いになるバグを防止）。
   - `--dry-run` と `--use-real-agents` の同時指定を相互排他とし、副作用前にエラー終了する方針を明記（15.2章）。
   - `--games` の値検証（1以上の整数）と、不正時に副作用前でエラー終了する方針を明記（15.5章新設）。
@@ -46,6 +46,9 @@ Status: Phase 1 dry-run implemented (APPROVED); Phase 2 prompt templates added; 
 - v0.8-draft (2026-07-09): Phase 3 real-CLI接続に備え、`prompts/*.md` を実際に読み込んで連結・プレースホルダ置換する `PromptBuilder`（`scripts/agents.py`）をPhase 2.5として実装。
   - `prompts/common_player_prompt.md` の安全ルール説明文に、禁止対象であるはずのMarkdownコードフェンス記法自体が例示として埋め込まれてしまっていた誤りを修正（QandA.md参照）。
   - `PromptBuilder`のメソッドシグネチャに`role`・`seer_result_summary`引数を追加した経緯をCLASS.md 3.4章に記録。
+- v0.9-draft (2026-07-09): Phase 3 AgentInvoker の実装を完了。
+  - `--use-real-agents` 時の外部AI呼び出し、一時ディレクトリ分離、タイムアウト/CLIエラーの安全なフォールバック、およびWindows/日本語環境でのデコードエラー（UnicodeDecodeError）の完全な回避策を実装。
+  - Q33の方針を維持し、ルート直下へ最新状態ファイルを複製しない。保存先は`logs/games/game_XXXX/`配下のみとする。
 
 ---
 
@@ -418,7 +421,7 @@ JSONとして解釈できても、以下のいずれかに該当する場合は*
 
 複数試合実行時は、試合ごとに `logs/games/game_XXXX/`（4桁ゼロ埋め連番。例: `game_0001`, `game_0002`）を新規作成し、その試合の `game_state.json` / `public_log.md` / `results.md` / `raw/` をその配下に保存する。
 
-Phase 1では、リポジトリのルート直下に `game_state.json` / `public_log.md` / `results.md` のコピー、シンボリックリンク、ショートカットを作成しない。これら3ファイルの保存先は、各試合の `logs/games/game_XXXX/` 配下のみとする。
+Phase 1・Phase 3とも、状態ファイルの保存先は`logs/games/game_XXXX/`配下のみとする。リポジトリのルート直下に`game_state.json` / `public_log.md` / `results.md`のコピー、シンボリックリンク、ショートカットは作成しない。
 
 Phase 5で追加する `summary.md` など、複数試合を横断する集計ファイルは `logs/` 直下に置く。
 
