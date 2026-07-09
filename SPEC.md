@@ -2,9 +2,9 @@
 
 ## Project: AI Multi-Agent Werewolf Game (One Night Werewolf)
 
-Version: 1.0-draft
+Version: v1.0-draft
 Repository: `garyohosu/werewolf-game`  
-Status: Phase 3 AgentInvoker implemented; pre-commit verification complete
+Status: Phase 4 summary analyzer implemented
 
 ---
 
@@ -402,6 +402,7 @@ JSONとして解釈できても、以下のいずれかに該当する場合は*
 │  ├─ test_agents.py
 │  ├─ test_game_rules.py
 │  ├─ test_json_utils.py
+│  ├─ test_analyze_results.py
 │  └─ test_random_regression.py
 └─ logs/
    └─ games/
@@ -486,6 +487,31 @@ python scripts/run_game.py --games 10 --seed 1234
 - `--games` は1以上の整数に制限する。
 - `--games 0`、負数、整数以外、未知オプションは引数エラーとする。
 - 不正引数時は、設定読み込み、乱数生成器の初期化、ディレクトリ作成より前に非0で終了し、ファイルシステムへ副作用を与えない。
+
+### 15.6 複数試合集計（analyze_results.py）の実行
+
+複数試合の実行結果を Markdown または JSON 形式で集計してレポート出力する。
+
+```bash
+# デフォルトで logs/games 配下を集計し、Markdown形式で標準出力する
+python scripts/analyze_results.py
+
+# ログディレクトリを指定して集計する
+python scripts/analyze_results.py --logs-root logs/games
+
+# JSON形式で標準出力する
+python scripts/analyze_results.py --format json
+
+# 指定されたファイルに集計結果を保存する（親ディレクトリ reports/ がない場合は自動生成される）
+python scripts/analyze_results.py --output reports/summary.md
+```
+
+#### 集計仕様
+- **主入力**: `logs/games/game_XXXX/game_state.json` のみを集計対象とし、`public_log.md` や `results.md`、`raw/` は原則として集計対象外とする。
+- **有効試合**: `phase == "finished"` である試合のみを集計に含める。`phase != "finished"`（未完了）の試合はスキップする。
+- **スキップ処理**: JSON破損、必須キー（`game_id`, `phase`, `players`, `winner`, `executed`）の欠落、`players` や `winner`/`executed` の不正データについては、その試合をスキップし、集計全体は停止せずに継続する。
+- **警告**: スキップされた試合の情報とその理由は `warnings`（Markdown の Warnings セクション、JSON の `warnings` キー）に記録される。
+- **生成物の除外**: `logs/` および `reports/` ディレクトリは自動生成物であり、Git管理対象外とする（`.gitignore` に追加済み）。
 
 ---
 
