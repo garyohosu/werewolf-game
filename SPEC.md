@@ -2,9 +2,9 @@
 
 ## Project: AI Multi-Agent Werewolf Game (One Night Werewolf)
 
-Version: 0.6-draft
+Version: 0.7-draft
 Repository: `garyohosu/werewolf-game`  
-Status: Specification updated — resolved Q30-Q40 (SEQUENCE.md review); ready for Phase 1 implementation
+Status: Phase 1 dry-run implemented and reviewed (APPROVED); Phase 2 prompt templates added
 
 ---
 
@@ -40,6 +40,9 @@ Status: Specification updated — resolved Q30-Q40 (SEQUENCE.md review); ready f
   - Phase 3 real-CLI時の `--seed` 再現性の保証範囲を、エンジン内乱数の決定性のみに限定することを明記（16.5章）。
   - 試合データの書き込み失敗時は実行全体を停止し、完了済み試合は変更せず、不完全ディレクトリは診断用に残す方針を明記（16.6章新設）。
   - `game_state.json` の `phase` の許容値（`setup` → `night` → `speech` → `vote` → `finished`）を明記（17.3章）。
+- v0.7-draft (2026-07-09): Phase 1 dry-run実装（`034faed`）がレビューでAPPROVEDとなったことを受け、Phase 2（プロンプト整備）に着手。
+  - `prompts/` に `speech_prompt.md` / `vote_prompt.md` を追加（14章）。発言ラウンド・投票ラウンド用のフェーズ別プロンプトとして、`common_player_prompt.md` および役職別プロンプトと組み合わせて使う。
+  - 各プロンプトの安全ルール（ファイル操作・シェル実行の禁止、秘密情報の推測禁止、JSON以外の出力禁止）は16.4章の方針を踏襲し、連結し忘れた場合でも単体で機能するよう各ファイルに重複して記載する方針とした。
 
 ---
 
@@ -373,12 +376,22 @@ JSONとして解釈できても、以下のいずれかに該当する場合は*
 │  ├─ villager_prompt.md
 │  ├─ seer_prompt.md
 │  ├─ werewolf_prompt.md
-│  └─ night_seer_prompt.md
+│  ├─ night_seer_prompt.md
+│  ├─ speech_prompt.md
+│  └─ vote_prompt.md
 ├─ scripts/
 │  ├─ run_game.py
 │  ├─ agents.py
 │  ├─ game_rules.py
-│  └─ json_utils.py
+│  ├─ json_utils.py
+│  ├─ models.py
+│  ├─ log_writer.py
+│  └─ random_utils.py
+├─ tests/
+│  ├─ test_agents.py
+│  ├─ test_game_rules.py
+│  ├─ test_json_utils.py
+│  └─ test_random_regression.py
 └─ logs/
    └─ games/
       └─ game_0001/
@@ -388,6 +401,8 @@ JSONとして解釈できても、以下のいずれかに該当する場合は*
          └─ raw/
             └─ 01_speech_Codex_syntax.txt (例)
 ```
+
+`scripts/` は当初 `run_game.py` / `agents.py` / `game_rules.py` / `json_utils.py` の4ファイル構成を基本としていたが、Phase 1実装時に `game_rules.py` の肥大化を避けるため `models.py`（データクラス）・`log_writer.py`（`LogWriter`）・`random_utils.py`（`RandomGenerator`）へ分割した（QandA.md Q41）。外部仕様・CLI仕様・ログ仕様への影響はない。
 
 `night_werewolf_prompt.md` は初期版（ワンナイト人狼、夜の襲撃なし）では作成・使用しない。将来拡張で夜の襲撃を追加する場合に作成する（3章、9章、22章参照）。
 
