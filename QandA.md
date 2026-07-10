@@ -699,3 +699,14 @@ Q30〜Q40はすべて解決し、SPEC.mdおよびSEQUENCE.mdへ反映済み。Ph
   - 修正後に改めて `--use-real-agents --agent-timeout 120` で1試合実行して検証したところ、Claude/Grok/agyは正常に応答したが、Codexは今回も「役職・人数・フェーズ・公開情報を教えてください」と聞き返し、`error_type=syntax` が再発した。プロンプト強化だけでは確実に防げないことを確認済み。
   - SPEC.mdの設計上、AI応答がJSONとして不正な場合はフォールバック処理でゲーム進行自体は継続するため（12章）、この問題によってゲームがクラッシュすることはない。Codexの応答品質そのものの改善（モデル・reasoning設定の変更、`codex exec` 以外の呼び出し方法の検討など）は将来課題とする。
 - **未決事項**: プロンプト強化の効果は1回の実行では十分に検証できていない（複数回試行しての改善率の定量評価は未実施）。改善が不十分な場合は、Codex呼び出しパラメータ（`config/agents.json` の `args`）の見直しを別途検討する。
+
+### Q62. Codex専用のローカルAGENTS.md生成とcodex_player_guide.mdの採用 [対応中 → 実装済み、fallback自体は残存] **重大度: 中**
+- **該当**: `scripts/agents.py`（`AgentInvoker._invoke`、`PromptBuilder`）、`prompts/codex_player_guide.md`（新規）
+- **問題**: Q61で追加した共通プロンプト側の「追加質問禁止」ルールだけでは、Codexの聞き返し（`error_type=syntax`）を防げないことを実運用検証で確認した。scripted agentやdummy agentに置き換えるのではなく、Codex自身の応答を得ることを優先しつつ、Codexに「開発エージェントではなくゲームプレイヤーである」ことをより強く認識させる方法が必要だった。
+- **決定した方針**:
+  - **Codex専用のローカル`AGENTS.md`生成**: `AgentInvoker._invoke`で、呼び出し対象プレイヤーが`Codex`の場合のみ、そのプレイヤーの手番用一時ディレクトリ（`tempfile.TemporaryDirectory()`のcwd）に`AGENTS.md`を生成してから`codex.cmd`を起動する。内容は「開発エージェントではない」「コード編集・ファイル作成・テスト実行・git操作・作業報告をしない」に加え、「情報が不足していると感じた場合はそれが誤りであり、質問せずJSONだけを返す」ことを明記する。これはリポジトリ直下の`AGENTS.md`ではなく、ゲーム用の一時ディレクトリにのみ生成し、他のプレイヤー（Claude/Grok/agy）には生成しない。
+  - **Codex専用ガイドプロンプト`prompts/codex_player_guide.md`の新設**: 「開発エージェントではなくプレイヤーである」「追加質問・確認質問・説明文・謝罪・作業報告・Markdownの禁止」「情報が不足して見えてもプロンプト内の情報だけで判断する」「フェーズごとの出力JSON形式」を明記する。`PromptBuilder`は、対象プレイヤー名が`Codex`の場合のみ、組み立てるプロンプトの先頭（`common_player_prompt.md`より前）に本ファイルの内容を挿入する。ファイルが存在しない場合（合成テスト用フィクスチャ等）は何も挿入せず、既存の挙動を維持する。
+  - Codexがまた不審な応答を返した場合に備え、`prompts/codex_player_guide.md`へ注意事項を追記して改善できる、育てられる設計とした。
+  - 既存のfallback機構（JSON検証・`raw/`保存・ダミー応答での続行）は変更せず残す。
+- **検証結果**: `--use-real-agents --agent-timeout 120 --games 3`で再検証したところ（game_0011〜0013）、Codexの応答は`error_type=syntax`（聞き返しの会話文）から`error_type=semantic`（`{"status":"ok"}` `{"acknowledged":true}` のような、構文的には正しいJSONだが指定スキーマ外の応答）に変化した。**聞き返し自体はほぼ解消したが、Codexの手番はこの3試合・7回すべてでフォールバック扱いのままであり、fallback発生率そのものは改善していない。**
+- **未決事項**: 「JSON構文には従うが指定スキーマの値を埋めない」という新しい失敗モードへの対応（第2段階で検討予定のJSON失敗時の自動リプロンプト、第3段階で検討予定の`CODEX_HOME`分離や`model_reasoning_effort`変更）は未着手。

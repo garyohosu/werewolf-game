@@ -181,3 +181,47 @@ def test_agent_invoker_command_not_found(tmp_path: Path) -> None:
 
         assert exc_info.value.returncode == 127
         assert "not found" in str(exc_info.value)
+
+
+def _fake_run_capturing_agents_md(captured: dict, stdout: str = '{"speech": "hi", "reason": "x"}'):
+    def fake_run(cmd, **kwargs):
+        cwd = Path(kwargs["cwd"])
+        agents_md = cwd / "AGENTS.md"
+        captured["exists"] = agents_md.exists()
+        captured["content"] = agents_md.read_text(encoding="utf-8") if agents_md.exists() else None
+        mock_res = MagicMock()
+        mock_res.returncode = 0
+        mock_res.stdout = stdout
+        mock_res.stderr = ""
+        return mock_res
+
+    return fake_run
+
+
+def test_agent_invoker_writes_local_agents_md_for_codex(tmp_path: Path) -> None:
+    """QandA.md Q62: Codex only, a local AGENTS.md is written into its
+    per-call temp cwd before the CLI is invoked."""
+    prompts_dir = _prepare_prompts(tmp_path)
+    config = AgentConfig(name="Codex", command="codex.cmd", args=["exec"], prompt_mode="arg")
+    invoker = AgentInvoker([config], prompts_dir)
+
+    captured: dict = {}
+    with patch("subprocess.run", side_effect=_fake_run_capturing_agents_md(captured)):
+        invoker.generate_speech("Codex", Role.VILLAGER, "log")
+
+    assert captured["exists"] is True
+    assert "開発エージェントではありません" in captured["content"]
+    assert "情報が不足しています" in captured["content"]
+
+
+@pytest.mark.parametrize("player_name", ["Claude", "Grok", "agy"])
+def test_agent_invoker_does_not_write_agents_md_for_non_codex(tmp_path: Path, player_name: str) -> None:
+    prompts_dir = _prepare_prompts(tmp_path)
+    config = AgentConfig(name=player_name, command=player_name.lower(), args=[], prompt_mode="arg")
+    invoker = AgentInvoker([config], prompts_dir)
+
+    captured: dict = {}
+    with patch("subprocess.run", side_effect=_fake_run_capturing_agents_md(captured)):
+        invoker.generate_speech(player_name, Role.VILLAGER, "log")
+
+    assert captured["exists"] is False

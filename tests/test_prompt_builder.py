@@ -190,3 +190,51 @@ def test_real_prompts_do_not_contain_markdown_code_fences_in_body() -> None:
         "Claude", Role.VILLAGER, public_log="", seer_result_summary=""
     )
     assert "```" not in prompt
+
+
+def test_codex_guide_prepended_only_for_codex(tmp_path: Path) -> None:
+    """QandA.md Q62: codex_player_guide.md, when present, is prepended
+    ahead of common_player_prompt.md for Codex only."""
+    prompts_dir = _make_synthetic_prompts_dir(tmp_path)
+    _write(prompts_dir / "codex_player_guide.md", "CODEXGUIDE for {{player_name}}.")
+    builder = PromptBuilder(prompts_dir, _PLAYER_NAMES)
+
+    codex_prompt = builder.build_speech_prompt(
+        "Codex", Role.VILLAGER, public_log="", seer_result_summary=""
+    )
+    assert "CODEXGUIDE for Codex" in codex_prompt
+    assert codex_prompt.index("CODEXGUIDE for Codex") < codex_prompt.index("COMMON for Codex")
+
+    claude_prompt = builder.build_speech_prompt(
+        "Claude", Role.VILLAGER, public_log="", seer_result_summary=""
+    )
+    assert "CODEXGUIDE" not in claude_prompt
+
+
+def test_missing_codex_guide_file_is_tolerated(tmp_path: Path) -> None:
+    # The synthetic fixture (like the real repo before Q62) has no
+    # codex_player_guide.md; PromptBuilder must still work for every player.
+    prompts_dir = _make_synthetic_prompts_dir(tmp_path)
+    builder = PromptBuilder(prompts_dir, _PLAYER_NAMES)
+    prompt = builder.build_speech_prompt(
+        "Codex", Role.VILLAGER, public_log="", seer_result_summary=""
+    )
+    assert "COMMON for Codex" in prompt
+
+
+def test_real_codex_guide_is_prepended_and_safe(real_builder: PromptBuilder) -> None:
+    codex_prompt = real_builder.build_speech_prompt(
+        "Codex", Role.VILLAGER, public_log="", seer_result_summary=""
+    )
+    assert "開発エージェントではありません" in codex_prompt
+    assert "情報が不足しています" in codex_prompt
+    assert "```" not in codex_prompt
+    assert "{{" not in codex_prompt
+    assert codex_prompt.index("開発エージェントではありません") < codex_prompt.index(
+        "このゲームには4人のプレイヤー"
+    )
+
+    claude_prompt = real_builder.build_speech_prompt(
+        "Claude", Role.VILLAGER, public_log="", seer_result_summary=""
+    )
+    assert "開発エージェントではありません" not in claude_prompt

@@ -156,6 +156,16 @@ Primary target: Phase 1 dry-run, Phase 3 AgentInvoker, Phase 4 summary analyzer
 | TC-GME-013 | 投票フェーズで`AgentCliError`（全員） | 4件の`raw/..._vote_..._cli.txt`保存、`results.md`に`error_type=cli`が4件、ゲーム完走 |
 | TC-E2E-006 | `AgentInvoker`を通した1試合（`subprocess.run`モックで全応答が正常JSON） | `raw/`が空、`results.md`に「エラー記録」なし、9回のCLI呼び出し（夜1+発言4+投票4）すべて`shell=False`・非リポジトリルートcwd |
 
+### 8.1 Codex専用対策（QandA.md Q62、`subprocess.run`モック）
+
+| ID | 条件・操作 | 期待結果 |
+|---|---|---|
+| TC-INV-012 | プレイヤー名が`Codex`で`_invoke`を呼ぶ | `subprocess.run`呼び出し時点の`cwd`直下に`AGENTS.md`が存在し、「開発エージェントではありません」「情報が不足しています」を含む |
+| TC-INV-013 | プレイヤー名が`Claude`/`Grok`/`agy`のいずれかで`_invoke`を呼ぶ | 同じ`cwd`直下に`AGENTS.md`は生成されない |
+| TC-INV-014 | `prompts/codex_player_guide.md`が存在するプロンプトディレクトリで、`PromptBuilder.build_speech_prompt("Codex", ...)`を呼ぶ | 組み立てたプロンプトの先頭（`common_player_prompt.md`由来の文言より前）に`codex_player_guide.md`の内容が挿入される |
+| TC-INV-015 | 同条件で`build_speech_prompt("Claude", ...)`を呼ぶ | `codex_player_guide.md`の内容は挿入されない |
+| TC-INV-016 | `prompts/codex_player_guide.md`が存在しないプロンプトディレクトリ（既存の合成テストフィクスチャ等） | `PromptBuilder`は例外を出さず、Codex宛のプロンプトも従来どおり組み立てられる（後方互換） |
+
 ---
 
 ## 9. 実装開始判定

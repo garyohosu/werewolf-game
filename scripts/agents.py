@@ -13,6 +13,35 @@ from typing import Dict, List, Sequence
 from models import AgentConfig, Role
 from random_utils import RandomGenerator
 
+# QandA.md Q62: Codex CLI (codex exec) tends to stay in its "developer
+# agent" persona and ask clarifying questions instead of returning the
+# required JSON. As a mitigation, Codex (and only Codex) receives (1) a
+# local AGENTS.md written into its per-call temp cwd (AgentInvoker._invoke)
+# and (2) a dedicated prompt prefix (PromptBuilder, codex_player_guide.md).
+_CODEX_PLAYER_NAME = "Codex"
+
+_CODEX_LOCAL_AGENTS_MD = """# AGENTS.md
+
+あなたは開発エージェントではありません。
+この実行では、コード編集、ファイル作成、テスト実行、git操作、作業報告を行ってはいけません。
+
+あなたはAI版ワンナイト人狼ゲームの1プレイヤーです。
+ユーザーから渡されるプロンプト内の情報だけを使って、1回だけ回答してください。
+
+追加質問は禁止です。
+確認質問は禁止です。
+説明文は禁止です。
+謝罪は禁止です。
+作業報告は禁止です。
+Markdownは禁止です。
+
+あなたが「情報が不足しています」と感じた場合、それは誤りです。
+必要な情報はユーザープロンプト内にあります。
+探し直さず、質問せず、JSONだけを返してください。
+
+必ず、指定されたJSONオブジェクトのみを返してください。
+"""
+
 
 class ConfigLoader:
     """Loads config/agents.json, preserving player definition order (5章)."""
@@ -198,6 +227,8 @@ class AgentInvoker(PlayerAgent):
         temp_dir = tempfile.TemporaryDirectory()
         try:
             cwd = temp_dir.name
+            if player == _CODEX_PLAYER_NAME:
+                (Path(cwd) / "AGENTS.md").write_text(_CODEX_LOCAL_AGENTS_MD, encoding="utf-8")
             try:
                 res = subprocess.run(
                     cmd,
@@ -282,6 +313,9 @@ class PromptBuilder:
         self._night_seer_template = self._load_template(prompts_dir / "night_seer_prompt.md")
         self._speech_template = self._load_template(prompts_dir / "speech_prompt.md")
         self._vote_template = self._load_template(prompts_dir / "vote_prompt.md")
+        self._codex_guide_template = self._load_template_optional(
+            prompts_dir / "codex_player_guide.md"
+        )
 
     def build_night_prompt(self, seer: str, candidates: Sequence[str]) -> str:
         """夜フェーズ: 占い師の占いプロンプト（占い師以外は夜に行動しないため役職固定）。"""
@@ -321,7 +355,11 @@ class PromptBuilder:
     def _assemble(self, player: str, role: Role, phase_text: str) -> str:
         common_text = self._render(self._common_template, player_name=player)
         role_text = self._render(self._role_templates[role], player_name=player)
-        prompt = "\n\n".join([common_text, role_text, phase_text])
+        parts: List[str] = []
+        if player == _CODEX_PLAYER_NAME and self._codex_guide_template:
+            parts.append(self._render(self._codex_guide_template, player_name=player))
+        parts.extend([common_text, role_text, phase_text])
+        prompt = "\n\n".join(parts)
 
         leftover = _PLACEHOLDER_PATTERN.search(prompt)
         if leftover:
@@ -341,3 +379,15 @@ class PromptBuilder:
         if not match:
             raise ValueError(f"{path}: could not find a '## 本文' text block")
         return match.group(1)
+
+    @classmethod
+    def _load_template_optional(cls, path: Path) -> str:
+        """Like _load_template, but returns "" if the file does not exist.
+
+        Used for prompts/codex_player_guide.md (QandA.md Q62), which is
+        specific to one player and need not exist in synthetic test
+        fixtures that only cover the common/role/phase templates.
+        """
+        if not path.exists():
+            return ""
+        return cls._load_template(path)
