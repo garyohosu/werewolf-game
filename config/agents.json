@@ -5,8 +5,8 @@
     "prompt_mode": "arg"
   },
   "Codex": {
-    "command": "codex",
-    "args": ["exec"],
+    "command": "codex.cmd",
+    "args": ["exec", "--skip-git-repo-check"],
     "prompt_mode": "arg"
   },
   "Grok": {
@@ -17,6 +17,6 @@
   "agy": {
     "command": "agy",
     "args": ["--print"],
-    "prompt_mode": "stdin"
+    "prompt_mode": "arg"
   }
 }

@@ -681,3 +681,21 @@ Q30〜Q40はすべて解決し、SPEC.mdおよびSEQUENCE.mdへ反映済み。Ph
 ### Q60. ルート直下の3ファイル（game_state.json 等）の生成有無 [解決済み → Q33/Q55維持] **重大度: 高**
 - **問題**: Phase 4実装時、または検証時にルート直下に `game_state.json` / `public_log.md` / `results.md` を生成するか。
 - **決定した方針**: Q33およびQ55で確定した方針を維持し、ルート直下には生成しない。
+
+---
+
+## `--use-real-agents` 実運用検証（2026-07-10）で判明した問題
+
+`--use-real-agents` で実CLI（Claude/Codex/Grok/agy）を実際に呼び出して検証した際に見つかった問題と対応方針を記録する。
+
+### Q61. Codexが追加情報を聞き返してJSONを返さない問題 [対応中 → prompts/*.mdに緩和策を追加、完全解決は未確認] **重大度: 中**
+- **該当**: `prompts/common_player_prompt.md`、`prompts/speech_prompt.md`、`prompts/vote_prompt.md`、`prompts/night_seer_prompt.md`
+- **問題**: `--use-real-agents` でCodexを実行すると、役職・人数・現在フェーズ・公開ログ・出力JSON形式まで全て含んだ完全なプロンプトを渡しているにもかかわらず、Codexが「役職、人数、現在のフェーズ、公開情報を教えてください」のように聞き返すだけでJSONを一切返さないことがあり、`error_type=syntax` としてフォールバック（ダミー応答）扱いになる。
+  - 当初は `~/.codex/AGENTS.md`（ユーザー環境のグローバルなCodex向けカスタム指示。CLAUDE.mdの「Dreamingタイム」指示をCodexにも適用したもの）がゲーム用の一時ディレクトリでも読み込まれ、`git rev-parse` の実行や `dream.md` 更新の可否確認を試みて本題のJSON出力を後回しにしていたことが一因と判明した。ユーザーが当該ファイルを `ORG_AGENTS.md` にリネームし、Codexに読み込ませないようにした。
+  - リネーム後も、`dream.md` への言及は消えたものの、「役職・人数・フェーズを教えてください」という聞き返し自体は再現した。`--ignore-user-config`（`~/.codex/config.toml` の `personality = "pragmatic"` 等を無効化）を付けても同様であったため、これは設定ファイル固有の問題ではなく、Codexの既定モデル（gpt-5.5, `codex exec` 単発呼び出し）自体が、必要な情報がすべて揃っていても一旦確認を返しやすいという挙動によるものと判断した。
+- **決定した方針**:
+  - `prompts/common_player_prompt.md` の「出力ルール」に、(1) 追加情報を要求しないこと、(2) 役職・人数・フェーズ・候補者・公開ログはプロンプト内に全て含まれている前提で扱うこと、(3) 情報が不足して見えても質問や確認を返さず必ず1回でJSONのみを返すこと、(4)「〜を教えてください」等の質問・保留の応答を禁止すること、を明記した。
+  - 同内容の要約を `prompts/speech_prompt.md` / `prompts/vote_prompt.md` / `prompts/night_seer_prompt.md` のフェーズ別本文にも重複して記載し、連結し忘れた場合でも単体で機能するようにした（SPEC.md 16.4章の方針を踏襲）。
+  - 修正後に改めて `--use-real-agents --agent-timeout 120` で1試合実行して検証したところ、Claude/Grok/agyは正常に応答したが、Codexは今回も「役職・人数・フェーズ・公開情報を教えてください」と聞き返し、`error_type=syntax` が再発した。プロンプト強化だけでは確実に防げないことを確認済み。
+  - SPEC.mdの設計上、AI応答がJSONとして不正な場合はフォールバック処理でゲーム進行自体は継続するため（12章）、この問題によってゲームがクラッシュすることはない。Codexの応答品質そのものの改善（モデル・reasoning設定の変更、`codex exec` 以外の呼び出し方法の検討など）は将来課題とする。
+- **未決事項**: プロンプト強化の効果は1回の実行では十分に検証できていない（複数回試行しての改善率の定量評価は未実施）。改善が不十分な場合は、Codex呼び出しパラメータ（`config/agents.json` の `args`）の見直しを別途検討する。
