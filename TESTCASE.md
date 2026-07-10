@@ -166,6 +166,15 @@ Primary target: Phase 1 dry-run, Phase 3 AgentInvoker, Phase 4 summary analyzer
 | TC-INV-015 | 同条件で`build_speech_prompt("Claude", ...)`を呼ぶ | `codex_player_guide.md`の内容は挿入されない |
 | TC-INV-016 | `prompts/codex_player_guide.md`が存在しないプロンプトディレクトリ（既存の合成テストフィクスチャ等） | `PromptBuilder`は例外を出さず、Codex宛のプロンプトも従来どおり組み立てられる（後方互換） |
 
+### 8.2 Codexのsemantic error時の自動リプロンプト（QandA.md Q63、`subprocess.run`モック）
+
+| ID | 条件・操作 | 期待結果 |
+|---|---|---|
+| TC-INV-017 | Codexの1回目の応答がsemantic error（構文は正しいがスキーマ不一致、例: `{"status":"ok"}`） | `subprocess.run`が2回呼ばれ、2回目の呼び出しプロンプトに1回目の応答内容・許可キー・正しいJSON形式が含まれ、最終的な戻り値は2回目の応答になる |
+| TC-INV-018 | Codexの1回目の応答が最初からスキーマに適合 | `subprocess.run`は1回しか呼ばれない |
+| TC-INV-019 | Codexの1回目の応答がsyntax error（JSONとして解釈できない文章） | リプロンプトは行われず、`subprocess.run`は1回しか呼ばれない |
+| TC-INV-020 | Codex以外のプレイヤーの応答がsemantic error | リプロンプトは行われず、`subprocess.run`は1回しか呼ばれない |
+
 ---
 
 ## 9. 実装開始判定

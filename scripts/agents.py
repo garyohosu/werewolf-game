@@ -10,6 +10,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Dict, List, Sequence
 
+from json_utils import JsonValidator
 from models import AgentConfig, Role
 from random_utils import RandomGenerator
 
@@ -41,6 +42,35 @@ Markdownは禁止です。
 
 必ず、指定されたJSONオブジェクトのみを返してください。
 """
+
+# QandA.md Q63: even with the above, Codex was observed to switch from a
+# prose "syntax" failure to a schema-invalid but syntactically valid
+# "semantic" one (e.g. {"status": "ok"}). If AgentInvoker's own semantic
+# check (using the same rules as JsonValidator) flags a Codex response
+# this way, retry once with a reprompt that quotes the schema explicitly.
+_CODEX_REQUIRED_SCHEMA: Dict[str, str] = {
+    "night": '{"target":"占う相手のプレイヤー名","reason":"占う相手を選んだ理由"}',
+    "speech": '{"speech":"あなたの発言内容","reason":"その発言をした意図"}',
+    "vote": '{"vote":"投票するプレイヤー名","reason":"その相手に投票した理由"}',
+}
+
+_CODEX_REQUIRED_KEYS: Dict[str, str] = {
+    "night": "target, reason",
+    "speech": "speech, reason",
+    "vote": "vote, reason",
+}
+
+
+def _build_codex_reprompt(phase: str, previous_raw: str) -> str:
+    return (
+        "前回のあなたの応答は次の内容でした:\n"
+        f"{previous_raw}\n\n"
+        "これは構文的には正しいJSONですが、このゲームで必要なスキーマではありません。\n"
+        f"このフェーズで許されるキーは {_CODEX_REQUIRED_KEYS[phase]} だけです。"
+        "status、acknowledged、message、ok のような、それ以外のキーは禁止です。\n"
+        "必ず次の形式のJSONオブジェクトだけを、それ以外の文字を含めずに1回で返してください。\n"
+        f"{_CODEX_REQUIRED_SCHEMA[phase]}"
+    )
 
 
 class ConfigLoader:
@@ -183,6 +213,7 @@ class AgentInvoker(PlayerAgent):
         player_names = [config.name for config in agent_configs]
         self._prompt_builder = PromptBuilder(prompts_dir, player_names)
         self._timeout = timeout
+        self._validator = JsonValidator()
         self.warnings: List[str] = []
 
     def pop_warnings(self) -> List[str]:
@@ -192,13 +223,13 @@ class AgentInvoker(PlayerAgent):
 
     def generate_night_action(self, seer: str, candidates: Sequence[str]) -> str:
         prompt = self._prompt_builder.build_night_prompt(seer, candidates)
-        return self._invoke(seer, prompt)
+        return self._invoke_with_codex_retry(seer, prompt, "night", candidates)
 
     def generate_speech(
         self, player: str, role: Role, public_log: str, seer_result_summary: str = ""
     ) -> str:
         prompt = self._prompt_builder.build_speech_prompt(player, role, public_log, seer_result_summary)
-        return self._invoke(player, prompt)
+        return self._invoke_with_codex_retry(player, prompt, "speech", [])
 
     def generate_vote(
         self,
@@ -209,7 +240,26 @@ class AgentInvoker(PlayerAgent):
         seer_result_summary: str = "",
     ) -> str:
         prompt = self._prompt_builder.build_vote_prompt(player, role, candidates, public_log, seer_result_summary)
-        return self._invoke(player, prompt)
+        return self._invoke_with_codex_retry(player, prompt, "vote", candidates)
+
+    def _invoke_with_codex_retry(
+        self, player: str, prompt: str, phase: str, candidates: Sequence[str]
+    ) -> str:
+        """QandA.md Q63: Codex only, retry once with a schema reprompt if
+        the first response is syntactically valid JSON but semantically
+        wrong (e.g. {"status": "ok"}). Other players and other error types
+        (syntax/timeout/cli) are unaffected; GameEngine's own JsonValidator
+        + FallbackHandler still run on whatever this returns."""
+        raw = self._invoke(player, prompt)
+        if player != _CODEX_PLAYER_NAME:
+            return raw
+
+        result = self._validator.validate(raw, phase, player, candidates)
+        if result.ok or result.error_type != "semantic":
+            return raw
+
+        reprompt = prompt + "\n\n" + _build_codex_reprompt(phase, raw)
+        return self._invoke(player, reprompt)
 
     def _invoke(self, player: str, prompt: str) -> str:
         import subprocess

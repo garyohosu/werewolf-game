@@ -710,3 +710,16 @@ Q30〜Q40はすべて解決し、SPEC.mdおよびSEQUENCE.mdへ反映済み。Ph
   - 既存のfallback機構（JSON検証・`raw/`保存・ダミー応答での続行）は変更せず残す。
 - **検証結果**: `--use-real-agents --agent-timeout 120 --games 3`で再検証したところ（game_0011〜0013）、Codexの応答は`error_type=syntax`（聞き返しの会話文）から`error_type=semantic`（`{"status":"ok"}` `{"acknowledged":true}` のような、構文的には正しいJSONだが指定スキーマ外の応答）に変化した。**聞き返し自体はほぼ解消したが、Codexの手番はこの3試合・7回すべてでフォールバック扱いのままであり、fallback発生率そのものは改善していない。**
 - **未決事項**: 「JSON構文には従うが指定スキーマの値を埋めない」という新しい失敗モードへの対応（第2段階で検討予定のJSON失敗時の自動リプロンプト、第3段階で検討予定の`CODEX_HOME`分離や`model_reasoning_effort`変更）は未着手。
+
+### Q63. Codexのsemantic error時の自動リプロンプト（第2段階） [対応中 → 実装済み、fallback自体は残存] **重大度: 中**
+- **該当**: `scripts/agents.py`（`AgentInvoker._invoke_with_codex_retry`、`_build_codex_reprompt`）
+- **問題**: Q62の対策後、Codexの聞き返し（`error_type=syntax`）はほぼ解消したが、代わりに`{"status":"ok"}` `{"acknowledged":true}`のような、構文的には正しいが指定スキーマを満たさないJSON（`error_type=semantic`）を返すようになった。この失敗モードは「前回の応答のどこがどう間違っているか」を具体的に指摘すれば改善する見込みがあると考え、第2段階としてJSON失敗時の自動リプロンプトを実装した。
+- **決定した方針**:
+  - `AgentInvoker`に`JsonValidator`のインスタンスを持たせ、Codexの応答を受け取った直後、`GameEngine`に渡す前に自前で検証する。
+  - 検証結果が`error_type == "semantic"`（構文は正しいがスキーマ不一致）の場合のみ、1回だけ追加のCLI呼び出し（リプロンプト）を行う。リプロンプトには、直前の不正な応答内容、許可されるキー、禁止される代表的なキー例（`status`/`acknowledged`/`message`/`ok`）、および該当フェーズの正しいJSON形式を具体的に含める。
+  - `error_type == "syntax"`（プロンプトへの聞き返しなど、JSONとして解釈できない応答）やタイムアウト・CLIエラーはリプロンプト対象としない。Codex以外のプレイヤーにもリプロンプトは行わない。
+  - リプロンプト後の応答は、成否にかかわらずそのまま`GameEngine`に返す。`GameEngine`側の`JsonValidator`・`FallbackHandler`・`raw/`保存の経路は変更しない（2回目も不正なら通常どおりフォールバックとして扱われる）。
+  - `tests/test_agents.py`に、(1) semantic error時に1回だけリプロンプトし2回目の応答を採用すること、(2) 最初から有効な応答なら1回しか呼ばないこと、(3) syntax errorではリプロンプトしないこと、(4) Codex以外はリプロンプトしないこと、を検証するテストを追加した。既存の`test_agent_invoker_stdin_mode`はモック応答が`reason`キー欠落でsemantic error扱いになり本対策が誤発火していたため、モック応答を有効なスキーマに修正した。
+- **検証結果**: `--use-real-agents --agent-timeout 120 --games 3`で再検証したところ（game_0015〜0017）、リプロンプト自体は正しく発火し、2回目の応答は1回目とは異なる内容（例:「確認」というキーを使った独自の応答、`{"status":"ready"}`、`{"ok":true}`）を返すことを`raw/`ログで確認した。**しかし2回目の応答もスキーマを満たさない場合が多く、この3試合・6回の手番すべてで最終的にフォールバック扱いとなった。fallback発生率そのものはQ62と同様、改善していない。**
+- **考察**: Codexは、スキーマを明示的に再提示されても「了解しました」「確認」のような確認・応答済みを示すJSONを返す傾向が強く、`codex exec`単発呼び出しの範囲では、プロンプト側からの指示強化（Q61〜Q63）だけでは解消しきらない可能性が高い。
+- **未決事項**: 第3段階（`CODEX_HOME`分離、`model_reasoning_effort`変更、`codex exec`以外の呼び出し方法の検討）は未着手。リプロンプトの追加コスト（Codexのみ最大2倍のCLI呼び出し・レイテンシ）に見合う改善が得られていない点は、今後の方針判断材料として明記しておく。

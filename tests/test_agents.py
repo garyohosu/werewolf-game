@@ -119,14 +119,16 @@ def test_agent_invoker_stdin_mode(tmp_path: Path) -> None:
     config = AgentConfig(name="Codex", command="codex", args=["exec"], prompt_mode="stdin")
     invoker = AgentInvoker([config], prompts_dir, timeout=5.0)
 
+    # schema-valid (speech + reason) so the Q63 retry path (below) does not
+    # kick in here; this test only covers stdin plumbing.
     mock_res = MagicMock()
     mock_res.returncode = 0
-    mock_res.stdout = '{"speech": "hello"}'
+    mock_res.stdout = '{"speech": "hello", "reason": "test"}'
     mock_res.stderr = ""
 
     with patch("subprocess.run", return_value=mock_res) as mock_run:
         res = invoker.generate_speech("Codex", Role.VILLAGER, "public log", "seer summary")
-        assert res == '{"speech": "hello"}'
+        assert res == '{"speech": "hello", "reason": "test"}'
 
         mock_run.assert_called_once()
         args, kwargs = mock_run.call_args
@@ -225,3 +227,85 @@ def test_agent_invoker_does_not_write_agents_md_for_non_codex(tmp_path: Path, pl
         invoker.generate_speech(player_name, Role.VILLAGER, "log")
 
     assert captured["exists"] is False
+
+
+def _sequenced_run(*stdouts: str):
+    """subprocess.run side_effect that returns each stdout in turn."""
+    responses = list(stdouts)
+
+    def fake_run(cmd, **kwargs):
+        mock_res = MagicMock()
+        mock_res.returncode = 0
+        mock_res.stdout = responses.pop(0)
+        mock_res.stderr = ""
+        return mock_res
+
+    return fake_run
+
+
+def test_codex_retries_once_on_semantic_error_and_uses_second_response(tmp_path: Path) -> None:
+    """QandA.md Q63: a schema-invalid-but-syntactically-valid Codex reply
+    (e.g. {"status": "ok"}) triggers exactly one reprompt, and the reprompt
+    quotes the required schema/keys."""
+    prompts_dir = _prepare_prompts(tmp_path)
+    config = AgentConfig(name="Codex", command="codex.cmd", args=["exec"], prompt_mode="arg")
+    invoker = AgentInvoker([config], prompts_dir)
+
+    with patch(
+        "subprocess.run",
+        side_effect=_sequenced_run('{"status": "ok"}', '{"speech": "hi", "reason": "ok"}'),
+    ) as mock_run:
+        res = invoker.generate_speech("Codex", Role.VILLAGER, "log")
+
+    assert res == '{"speech": "hi", "reason": "ok"}'
+    assert mock_run.call_count == 2
+    first_prompt = mock_run.call_args_list[0].args[0][-1]
+    second_prompt = mock_run.call_args_list[1].args[0][-1]
+    assert '{"status": "ok"}' not in first_prompt
+    assert '{"status": "ok"}' in second_prompt
+    assert "speech, reason" in second_prompt
+    assert '{"speech":"あなたの発言内容","reason":"その発言をした意図"}' in second_prompt
+
+
+def test_codex_no_retry_when_first_response_is_already_valid(tmp_path: Path) -> None:
+    prompts_dir = _prepare_prompts(tmp_path)
+    config = AgentConfig(name="Codex", command="codex.cmd", args=["exec"], prompt_mode="arg")
+    invoker = AgentInvoker([config], prompts_dir)
+
+    with patch(
+        "subprocess.run", side_effect=_sequenced_run('{"speech": "hi", "reason": "ok"}')
+    ) as mock_run:
+        res = invoker.generate_speech("Codex", Role.VILLAGER, "log")
+
+    assert res == '{"speech": "hi", "reason": "ok"}'
+    mock_run.assert_called_once()
+
+
+def test_codex_no_retry_on_syntax_error(tmp_path: Path) -> None:
+    """Only a "semantic" error (valid JSON, wrong schema) retries; prose
+    ("syntax") responses are left to the existing fallback mechanism."""
+    prompts_dir = _prepare_prompts(tmp_path)
+    config = AgentConfig(name="Codex", command="codex.cmd", args=["exec"], prompt_mode="arg")
+    invoker = AgentInvoker([config], prompts_dir)
+
+    with patch(
+        "subprocess.run", side_effect=_sequenced_run("役職を教えてください。")
+    ) as mock_run:
+        res = invoker.generate_speech("Codex", Role.VILLAGER, "log")
+
+    assert res == "役職を教えてください。"
+    mock_run.assert_called_once()
+
+
+def test_non_codex_semantic_error_does_not_retry(tmp_path: Path) -> None:
+    prompts_dir = _prepare_prompts(tmp_path)
+    config = AgentConfig(name="Claude", command="claude", args=["-p"], prompt_mode="arg")
+    invoker = AgentInvoker([config], prompts_dir)
+
+    with patch(
+        "subprocess.run", side_effect=_sequenced_run('{"status": "ok"}')
+    ) as mock_run:
+        res = invoker.generate_speech("Claude", Role.VILLAGER, "log")
+
+    assert res == '{"status": "ok"}'
+    mock_run.assert_called_once()
