@@ -175,6 +175,22 @@ Primary target: Phase 1 dry-run, Phase 3 AgentInvoker, Phase 4 summary analyzer
 | TC-INV-019 | Codexの1回目の応答がsyntax error（JSONとして解釈できない文章） | リプロンプトは行われず、`subprocess.run`は1回しか呼ばれない |
 | TC-INV-020 | Codex以外のプレイヤーの応答がsemantic error | リプロンプトは行われず、`subprocess.run`は1回しか呼ばれない |
 
+### 8.3 Codexへの自然文回答＋ローカル正規化（QandA.md Q64）
+
+| ID | 条件・操作 | 期待結果 | テスト |
+|---|---|---|---|
+| TC-CFG-001 | `config/agents.json`に`response_mode`/`normalize_with`を指定しない | `AgentConfig.response_mode`は`"json"`、`normalize_with`は`None`になる | `test_config_preserves_definition_order` |
+| TC-CFG-002 | `response_mode="natural_text"`, `normalize_with="local"`を指定 | `ConfigLoader`が値をそのまま`AgentConfig`へ格納する | `test_config_loads_optional_natural_text_response_mode` |
+| TC-CFG-003 | `response_mode`/`normalize_with`に不正な型・値を指定 | 起動時に`ValueError` | `test_invalid_config_is_rejected` |
+| TC-INV-027 | `response_mode="natural_text"`のCodexで`generate_speech`等を呼ぶ | 自然文向けの短いプロンプト（`build_natural_*_prompt`）が使われ、Q63の自動リプロンプトは経由せず、CLIの生応答（自然文）がそのまま返る | `test_agent_invoker_writes_natural_text_agents_md_for_codex_natural_mode` |
+| TC-INV-028 | 同上のCodex呼び出し時の一時ディレクトリ | JSON強制版ではなく、自然文回答を促す短い`AGENTS.md`が生成される（`JSONオブジェクト`という語を含まない） | `test_agent_invoker_writes_natural_text_agents_md_for_codex_natural_mode` |
+| TC-NORM-001 | 発言の自然文（「理由は」等のマーカーあり）を`normalize(phase="speech", ...)` | `speech`/`reason`に分割したJSONを返す | `test_natural_speech_becomes_json` |
+| TC-NORM-002 | 投票・占いの自然文に候補者名とアンカー語（「投票します」「占います」）が明示 | 対象候補者と理由を含むJSONを返す | `test_natural_vote_extracts_candidate_and_reason`、`test_natural_night_extracts_target_and_reason` |
+| TC-NORM-003 | 複数候補が本文にあるがアンカー語との距離が同点で紛らわしい、または候補者名が本文にない | `ok=False`、`error="missing_or_ambiguous_target"`（本文にない対象を推測で埋めない） | `test_multiple_candidates_without_action_anchor_is_ambiguous`、`test_missing_candidate_fails` |
+| TC-GME-014 | `GameEngine`に`response_mode="natural_text"`/`normalize_with="local"`のCodexを含めて1試合実行（自然文で応答するテストダブル） | `raw/`に`..._natural.txt`と`..._normalized.json`が保存され、正規化されたCodexの発言が`public_log.md`に反映され、`results.md`に`error_type=normalize`や「失敗」が出ない | `NaturalTextModeTests.test_codex_natural_text_is_normalized_and_logged` |
+
+`scripts/probe_codex_player.py`は、実際のCodex CLIへ単発プロンプトを送って応答を検証する独立ツール（`--max-calls`で呼び出し回数の上限を明示）。`tests/test_probe_codex_player.py`は同ツールのオフライン検証ロジック（`validate_stdout`）のみを対象とし、実CLI呼び出しは行わない。
+
 ---
 
 ## 9. 実装開始判定

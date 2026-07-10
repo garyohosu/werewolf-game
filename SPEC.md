@@ -585,6 +585,17 @@ Q61の全プレイヤー共通の対策だけではCodexの聞き返し（`error
 - リプロンプト後の応答は成否にかかわらずそのまま`GameEngine`に渡し、12章のJSON検証・フォールバック処理は変更しない（2回目も不正なら通常どおりフォールバックする）。
 - 実運用検証（QandA.md Q63）では、リプロンプト自体は正しく発火し2回目は1回目と異なる応答を返すことを確認したが、2回目もスキーマを満たさないことが多く、fallback発生率そのものは改善しなかった。この対策は「聞き返し」から「schema不一致」への失敗モードの変化（16.4.1章）に対する追加の緩和策であり、Codexの応答品質を完全に保証するものではない。
 
+### 16.4.3 Codexへの自然文回答＋ローカル正規化（response_mode / normalize_with）
+
+16.4.1・16.4.2章のJSON直接要求アプローチを重ねてもCodexのfallback発生率が改善しなかったため、Codexに限り「JSONを直接返させる」のをやめ、**自然文で回答させ、ゲーム側でJSONへローカル変換する**方式に切り替える（QandA.md Q64）。
+
+- `config/agents.json`の各プレイヤーには、任意項目として`response_mode`（既定`"json"`）と`normalize_with`（既定なし）を追加できる。値が不正な場合は起動時エラーとする。
+- `response_mode == "natural_text"`のプレイヤーには、通常のテンプレート連結プロンプトではなく、「JSONではなく普通の日本語の文章で答えてください」という短いプロンプト（`PromptBuilder.build_natural_night_prompt`/`build_natural_speech_prompt`/`build_natural_vote_prompt`）を渡す。Codex用ローカル`AGENTS.md`（16.4.1章）も、自然文回答を促す短い内容に差し替える。この場合、16.4.2章の自動リプロンプト（JSON前提）は行わない。
+- `normalize_with == "local"`のプレイヤーの生応答は、`GameEngine`が`NaturalTextNormalizer`（他のAI呼び出しを伴わないローカルのルールベース処理）でゲームの厳密JSONスキーマへ変換してから、12章のJSON検証・フォールバック処理に渡す。`response_mode == "json"`のプレイヤー（Claude/Grok/agy）はこれまでどおり変換を経ない。
+- `NaturalTextNormalizer`は、本文中に**明示的に**登場する候補者名と行動アンカー語（「投票します」「占います」等）から対象を絞り込む。候補者名が本文にない、または複数候補が同程度に紛らわしい場合は正規化失敗として扱い、本文にない対象を推測で補わない。
+- 正規化の生入力・成功結果・失敗理由は、`raw/{seq}_{phase}_{player}_natural.txt` / `..._normalized.json` / `..._normalize_error.txt`としてそれぞれ個別に保存する。
+- 実運用検証（QandA.md Q64）では、Codexの手番32回中31回（約97%）が正規化に成功し、Q61〜Q63のJSON直接要求アプローチ（ほぼ全滅）から大きく改善した。唯一の失敗例は、本文に対象が明示されていたにもかかわらず`NaturalTextNormalizer`側の曖昧判定ロジックが誤って失敗と判定したケースであり、Codex応答側の問題ではなかった。
+
 ### 16.5 乱数シードと再現性の確保
 
 `--seed X` が指定された場合、Phase 1（dry-run）を含めて、ゲーム内のあらゆるランダム要素を同一シードから再現可能にする。
