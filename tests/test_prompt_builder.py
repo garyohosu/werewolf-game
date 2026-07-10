@@ -238,3 +238,34 @@ def test_real_codex_guide_is_prepended_and_safe(real_builder: PromptBuilder) -> 
         "Claude", Role.VILLAGER, public_log="", seer_result_summary=""
     )
     assert "開発エージェントではありません" not in claude_prompt
+
+
+def test_natural_speech_prompt_asks_for_plain_japanese(real_builder: PromptBuilder) -> None:
+    prompt = real_builder.build_natural_speech_prompt(
+        "Codex", Role.VILLAGER, public_log="Claude: 私は村人です。", seer_result_summary=""
+    )
+    assert "JSONではなく、普通の日本語の文章で答えてください。" in prompt
+    assert "フェーズ: 発言" in prompt
+    assert "役職: villager" in prompt
+    assert "Claude: 私は村人です。" in prompt
+    assert "Return exactly one JSON object" not in prompt
+
+
+def test_natural_vote_prompt_includes_candidates(real_builder: PromptBuilder) -> None:
+    prompt = real_builder.build_natural_vote_prompt(
+        "Codex",
+        Role.VILLAGER,
+        candidates=["Claude", "Grok", "agy"],
+        public_log="Claude: hi",
+        seer_result_summary="",
+    )
+    assert "フェーズ: 投票" in prompt
+    assert "投票候補: Claude、Grok、agy" in prompt
+    assert "誰に投票するかを明記してください。" in prompt
+
+
+def test_natural_night_prompt_includes_candidates(real_builder: PromptBuilder) -> None:
+    prompt = real_builder.build_natural_night_prompt("Codex", ["Claude", "Grok", "agy"])
+    assert "フェーズ: 夜（占い）" in prompt
+    assert "占い候補: Claude、Grok、agy" in prompt
+    assert "誰を占うかを明記してください。" in prompt

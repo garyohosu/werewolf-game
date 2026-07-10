@@ -28,6 +28,17 @@ def _write_config(tmp_path: Path, payload) -> Path:
 def test_config_preserves_definition_order(tmp_path: Path) -> None:
     configs = ConfigLoader().load(_write_config(tmp_path, _valid_config()))
     assert [config.name for config in configs] == ["Claude", "Codex", "Grok", "agy"]
+    assert all(config.response_mode == "json" for config in configs)
+    assert all(config.normalize_with is None for config in configs)
+
+
+def test_config_loads_optional_natural_text_response_mode(tmp_path: Path) -> None:
+    payload = _valid_config()
+    payload["Codex"].update(response_mode="natural_text", normalize_with="local")
+    configs = ConfigLoader().load(_write_config(tmp_path, payload))
+    codex = next(config for config in configs if config.name == "Codex")
+    assert codex.response_mode == "natural_text"
+    assert codex.normalize_with == "local"
 
 
 @pytest.mark.parametrize(
@@ -38,6 +49,8 @@ def test_config_preserves_definition_order(tmp_path: Path) -> None:
         lambda data: data["Claude"].update(command=""),
         lambda data: data["Claude"].update(args="not-an-array"),
         lambda data: data["Claude"].update(prompt_mode="invalid"),
+        lambda data: data["Claude"].update(response_mode="invalid"),
+        lambda data: data["Claude"].update(normalize_with=[]),
     ],
 )
 def test_invalid_config_is_rejected(tmp_path: Path, mutate) -> None:
@@ -214,6 +227,31 @@ def test_agent_invoker_writes_local_agents_md_for_codex(tmp_path: Path) -> None:
     assert captured["exists"] is True
     assert "開発エージェントではありません" in captured["content"]
     assert "情報が不足しています" in captured["content"]
+
+
+def test_agent_invoker_writes_natural_text_agents_md_for_codex_natural_mode(tmp_path: Path) -> None:
+    prompts_dir = _prepare_prompts(tmp_path)
+    config = AgentConfig(
+        name="Codex",
+        command="codex.cmd",
+        args=["exec"],
+        prompt_mode="stdin",
+        response_mode="natural_text",
+        normalize_with="local",
+    )
+    invoker = AgentInvoker([config], prompts_dir)
+
+    captured: dict = {}
+    with patch(
+        "subprocess.run",
+        side_effect=_fake_run_capturing_agents_md(captured, stdout="私は村人です。"),
+    ):
+        res = invoker.generate_speech("Codex", Role.VILLAGER, "log")
+
+    assert res == "私は村人です。"
+    assert captured["exists"] is True
+    assert "日本語の普通文" in captured["content"]
+    assert "JSONオブジェクト" not in captured["content"]
 
 
 @pytest.mark.parametrize("player_name", ["Claude", "Grok", "agy"])

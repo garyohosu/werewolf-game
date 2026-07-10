@@ -20,6 +20,7 @@ from models import (
     SpeechEntry,
     VoteEntry,
 )
+from natural_text_normalizer import NaturalTextNormalizer
 from random_utils import RandomGenerator
 
 # 6章: 人狼1・占い師1・村人2
@@ -52,11 +53,13 @@ class GameEngine:
         log_writer: LogWriter,
     ) -> None:
         self._player_names = [config.name for config in agent_configs]
+        self._configs = {config.name: config for config in agent_configs}
         self._rng = rng
         self._agent = player_agent
         self._validator = validator
         self._fallback = fallback_handler
         self._log = log_writer
+        self._normalizer = NaturalTextNormalizer()
         self._error_seq = 0
 
     def run_one_game(self, game_id: int) -> GameResult:
@@ -107,21 +110,62 @@ class GameEngine:
             for w in warnings:
                 self._log.append_warning(game_id, w)
 
+    def _normalize_if_needed(
+        self,
+        game_id: int,
+        phase: str,
+        player: str,
+        role: Role,
+        candidates: Sequence[str],
+        public_log: str,
+        raw: str,
+    ) -> str | None:
+        config = self._configs[player]
+        if config.response_mode != "natural_text":
+            return raw
+
+        seq = self._next_seq()
+        self._log.save_natural_response(game_id, seq, phase, player, raw or "")
+        result = self._normalizer.normalize(
+            phase=phase,
+            player=player,
+            role=role.value,
+            candidates=candidates,
+            public_log=public_log,
+            raw_text=raw or "",
+        )
+        if not result.ok:
+            self._log.save_normalize_error(game_id, seq, phase, player, result.error or "normalize_failed")
+            self._log.record_error(game_id, seq, phase, player, "normalize")
+            return None
+
+        self._log.save_normalized_response(game_id, seq, phase, player, result.json_text or "")
+        return result.json_text
+
     def _run_night_phase(self, game_id: int, state: GameState) -> None:
         seer = next(name for name, player in state.players.items() if player.role == Role.SEER)
         candidates = [name for name in self._player_names if name != seer]
 
         try:
             raw = self._agent.generate_night_action(seer, candidates)
-            result = self._validator.validate(raw, "night", seer, candidates)
+            normalized_raw = self._normalize_if_needed(
+                game_id, "night", seer, Role.SEER, candidates, "", raw
+            )
 
-            if result.ok:
-                target = result.action["target"]
-            else:
-                seq = self._next_seq()
-                self._log.save_raw_response(game_id, seq, "night", seer, result.error_type, raw or "")
-                self._log.record_error(game_id, seq, "night", seer, result.error_type)
+            if normalized_raw is None:
                 target = self._fallback.decide_target(candidates)
+            else:
+                result = self._validator.validate(normalized_raw, "night", seer, candidates)
+
+                if result.ok:
+                    target = result.action["target"]
+                else:
+                    seq = self._next_seq()
+                    self._log.save_raw_response(
+                        game_id, seq, "night", seer, result.error_type, normalized_raw or ""
+                    )
+                    self._log.record_error(game_id, seq, "night", seer, result.error_type)
+                    target = self._fallback.decide_target(candidates)
         except AgentTimeoutError as exc:
             seq = self._next_seq()
             err_info = f"Error: {exc}\nStdout: {exc.stdout}\nStderr: {exc.stderr}"
@@ -151,19 +195,30 @@ class GameEngine:
 
             try:
                 raw = self._agent.generate_speech(player, role, public_log_so_far, seer_result_summary)
-                result = self._validator.validate(raw, "speech", player, [])
+                normalized_raw = self._normalize_if_needed(
+                    game_id, "speech", player, role, [], public_log_so_far, raw
+                )
 
-                if result.ok:
-                    entry = SpeechEntry(
-                        player=player, speech=result.action["speech"], reason=result.action["reason"]
-                    )
-                else:
-                    seq = self._next_seq()
-                    self._log.save_raw_response(game_id, seq, "speech", player, result.error_type, raw or "")
-                    self._log.record_error(game_id, seq, "speech", player, result.error_type)
+                if normalized_raw is None:
                     entry = SpeechEntry(
                         player=player, speech=self._fallback.decide_speech(), reason=None, failed=True
                     )
+                else:
+                    result = self._validator.validate(normalized_raw, "speech", player, [])
+
+                    if result.ok:
+                        entry = SpeechEntry(
+                            player=player, speech=result.action["speech"], reason=result.action["reason"]
+                        )
+                    else:
+                        seq = self._next_seq()
+                        self._log.save_raw_response(
+                            game_id, seq, "speech", player, result.error_type, normalized_raw or ""
+                        )
+                        self._log.record_error(game_id, seq, "speech", player, result.error_type)
+                        entry = SpeechEntry(
+                            player=player, speech=self._fallback.decide_speech(), reason=None, failed=True
+                        )
             except AgentTimeoutError as exc:
                 seq = self._next_seq()
                 err_info = f"Error: {exc}\nStdout: {exc.stdout}\nStderr: {exc.stderr}"
@@ -201,19 +256,30 @@ class GameEngine:
 
             try:
                 raw = self._agent.generate_vote(player, role, candidates, frozen_public_log, seer_result_summary)
-                result = self._validator.validate(raw, "vote", player, candidates)
+                normalized_raw = self._normalize_if_needed(
+                    game_id, "vote", player, role, candidates, frozen_public_log, raw
+                )
 
-                if result.ok:
-                    entry = VoteEntry(
-                        player=player, vote=result.action["vote"], reason=result.action["reason"]
-                    )
-                else:
-                    seq = self._next_seq()
-                    self._log.save_raw_response(game_id, seq, "vote", player, result.error_type, raw or "")
-                    self._log.record_error(game_id, seq, "vote", player, result.error_type)
+                if normalized_raw is None:
                     entry = VoteEntry(
                         player=player, vote=self._fallback.decide_target(candidates), reason=None, failed=True
                     )
+                else:
+                    result = self._validator.validate(normalized_raw, "vote", player, candidates)
+
+                    if result.ok:
+                        entry = VoteEntry(
+                            player=player, vote=result.action["vote"], reason=result.action["reason"]
+                        )
+                    else:
+                        seq = self._next_seq()
+                        self._log.save_raw_response(
+                            game_id, seq, "vote", player, result.error_type, normalized_raw or ""
+                        )
+                        self._log.record_error(game_id, seq, "vote", player, result.error_type)
+                        entry = VoteEntry(
+                            player=player, vote=self._fallback.decide_target(candidates), reason=None, failed=True
+                        )
             except AgentTimeoutError as exc:
                 seq = self._next_seq()
                 err_info = f"Error: {exc}\nStdout: {exc.stdout}\nStderr: {exc.stderr}"

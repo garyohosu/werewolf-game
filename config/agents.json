@@ -7,7 +7,9 @@
   "Codex": {
     "command": "codex.cmd",
     "args": ["exec", "--skip-git-repo-check"],
-    "prompt_mode": "arg"
+    "prompt_mode": "stdin",
+    "response_mode": "natural_text",
+    "normalize_with": "local"
   },
   "Grok": {
     "command": "grok",

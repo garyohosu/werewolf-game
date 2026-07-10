@@ -42,6 +42,8 @@ class AgentConfig:
     command: str
     args: List[str]
     prompt_mode: str
+    response_mode: str = "json"
+    normalize_with: Optional[str] = None
 
 
 @dataclass

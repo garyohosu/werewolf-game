@@ -189,6 +189,35 @@ class _CliErrorOnVoteAgent(PlayerAgent):
         )
 
 
+class _CodexNaturalTextAgent(PlayerAgent):
+    def __init__(self, rng: RandomGenerator) -> None:
+        self._delegate = DryRunAgent(rng)
+
+    def generate_night_action(self, seer: str, candidates: Sequence[str]) -> str:
+        if seer == "Codex":
+            return "Grokを占います。理由は発言の色を確認したいためです。"
+        return self._delegate.generate_night_action(seer, candidates)
+
+    def generate_speech(
+        self, player: str, role: Role, public_log: str, seer_result_summary: str = ""
+    ) -> str:
+        if player == "Codex":
+            return "私は村人として慎重に見ます。理由は、占い師を無理に出したくないためです。"
+        return self._delegate.generate_speech(player, role, public_log, seer_result_summary)
+
+    def generate_vote(
+        self,
+        player: str,
+        role: Role,
+        candidates: Sequence[str],
+        public_log: str,
+        seer_result_summary: str = "",
+    ) -> str:
+        if player == "Codex":
+            return "Claudeに投票します。理由は占い師を炙っているように見えるためです。"
+        return self._delegate.generate_vote(player, role, candidates, public_log, seer_result_summary)
+
+
 class Phase3ExceptionFallbackTests(unittest.TestCase):
     """GameEngine must route AgentTimeoutError/AgentCliError through the same
     raw/-save + FallbackHandler path as JSON syntax/semantic errors (CLASS.md 3.5)."""
@@ -228,6 +257,43 @@ class Phase3ExceptionFallbackTests(unittest.TestCase):
 
             results_md = (game_dir / "results.md").read_text(encoding="utf-8")
             self.assertEqual(results_md.count("error_type=cli"), 4)
+
+
+class NaturalTextModeTests(unittest.TestCase):
+    def test_codex_natural_text_is_normalized_and_logged(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            rng = RandomGenerator(42)
+            configs = _make_agent_configs()
+            for config in configs:
+                if config.name == "Codex":
+                    config.response_mode = "natural_text"
+                    config.normalize_with = "local"
+
+            log_writer = LogWriter(tmp_path / "games")
+            engine = GameEngine(
+                agent_configs=configs,
+                rng=rng,
+                player_agent=_CodexNaturalTextAgent(rng),
+                validator=JsonValidator(),
+                fallback_handler=FallbackHandler(rng),
+                log_writer=log_writer,
+            )
+            engine.run_one_game(1)
+
+            game_dir = tmp_path / "games" / "game_0001"
+            raw_names = sorted(p.name for p in (game_dir / "raw").iterdir())
+            self.assertTrue(any(name.endswith("_speech_Codex_natural.txt") for name in raw_names))
+            self.assertTrue(any(name.endswith("_speech_Codex_normalized.json") for name in raw_names))
+            self.assertTrue(any(name.endswith("_vote_Codex_natural.txt") for name in raw_names))
+            self.assertTrue(any(name.endswith("_vote_Codex_normalized.json") for name in raw_names))
+
+            public_log = (game_dir / "public_log.md").read_text(encoding="utf-8")
+            self.assertIn("私は村人として慎重に見ます。", public_log)
+
+            results_md = (game_dir / "results.md").read_text(encoding="utf-8")
+            self.assertNotIn("player=Codex error_type=normalize", results_md)
+            self.assertNotIn("Codex (失敗)", results_md)
 
 
 def _fake_subprocess_run(*args, **kwargs):

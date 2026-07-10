@@ -104,6 +104,23 @@ class LogWriter:
         filename = f"{seq:02d}_{phase}_{player}_{error_type}.txt"
         (raw_dir / filename).write_text(raw, encoding="utf-8")
 
+    def save_natural_response(self, game_id: int, seq: int, phase: str, player: str, raw: str) -> None:
+        raw_dir = self._game_dir(game_id) / "raw"
+        filename = f"{seq:02d}_{phase}_{player}_natural.txt"
+        (raw_dir / filename).write_text(raw, encoding="utf-8")
+
+    def save_normalized_response(
+        self, game_id: int, seq: int, phase: str, player: str, normalized_json: str
+    ) -> None:
+        raw_dir = self._game_dir(game_id) / "raw"
+        filename = f"{seq:02d}_{phase}_{player}_normalized.json"
+        (raw_dir / filename).write_text(normalized_json, encoding="utf-8")
+
+    def save_normalize_error(self, game_id: int, seq: int, phase: str, player: str, error: str) -> None:
+        raw_dir = self._game_dir(game_id) / "raw"
+        filename = f"{seq:02d}_{phase}_{player}_normalize_error.txt"
+        (raw_dir / filename).write_text(error, encoding="utf-8")
+
     def record_error(self, game_id: int, seq: int, phase: str, player: str, error_type: str) -> None:
         self._errors.setdefault(game_id, []).append(
             ErrorRecord(seq=seq, phase=phase, player=player, error_type=error_type)

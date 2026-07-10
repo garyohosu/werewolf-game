@@ -43,6 +43,13 @@ Markdownは禁止です。
 必ず、指定されたJSONオブジェクトのみを返してください。
 """
 
+_CODEX_NATURAL_TEXT_AGENTS_MD = """# AGENTS.md
+
+日本語の普通文で、人狼ゲームのプレイヤーとして回答してください。
+追加質問をせず、プロンプト内の情報だけで1回だけ回答してください。
+コード編集、ファイル作成、テスト実行、git操作、作業報告は行わないでください。
+"""
+
 # QandA.md Q63: even with the above, Codex was observed to switch from a
 # prose "syntax" failure to a schema-invalid but syntactically valid
 # "semantic" one (e.g. {"status": "ok"}). If AgentInvoker's own semantic
@@ -96,19 +103,37 @@ class ConfigLoader:
                 raise ValueError("player names must be non-empty strings")
             if not isinstance(entry, dict):
                 raise ValueError(f"{name}: configuration must be an object")
-            if set(entry) != {"command", "args", "prompt_mode"}:
-                raise ValueError(f"{name}: command, args, and prompt_mode are required")
+            allowed_keys = {"command", "args", "prompt_mode", "response_mode", "normalize_with"}
+            required_keys = {"command", "args", "prompt_mode"}
+            if not required_keys.issubset(entry) or not set(entry).issubset(allowed_keys):
+                raise ValueError(
+                    f"{name}: command, args, prompt_mode are required; "
+                    "response_mode and normalize_with are optional"
+                )
             command = entry["command"]
             args = entry["args"]
             prompt_mode = entry["prompt_mode"]
+            response_mode = entry.get("response_mode", "json")
+            normalize_with = entry.get("normalize_with")
             if not isinstance(command, str) or not command:
                 raise ValueError(f"{name}: command must be a non-empty string")
             if not isinstance(args, list) or not all(isinstance(arg, str) for arg in args):
                 raise ValueError(f"{name}: args must be an array of strings")
             if prompt_mode not in {"arg", "stdin"}:
                 raise ValueError(f"{name}: prompt_mode must be 'arg' or 'stdin'")
+            if response_mode not in {"json", "natural_text"}:
+                raise ValueError(f"{name}: response_mode must be 'json' or 'natural_text'")
+            if normalize_with is not None and not isinstance(normalize_with, str):
+                raise ValueError(f"{name}: normalize_with must be a string when provided")
             configs.append(
-                AgentConfig(name=name, command=command, args=list(args), prompt_mode=prompt_mode)
+                AgentConfig(
+                    name=name,
+                    command=command,
+                    args=list(args),
+                    prompt_mode=prompt_mode,
+                    response_mode=response_mode,
+                    normalize_with=normalize_with,
+                )
             )
         return configs
 
@@ -222,12 +247,22 @@ class AgentInvoker(PlayerAgent):
         return w
 
     def generate_night_action(self, seer: str, candidates: Sequence[str]) -> str:
+        config = self._configs[seer]
+        if config.response_mode == "natural_text":
+            prompt = self._prompt_builder.build_natural_night_prompt(seer, candidates)
+            return self._invoke(seer, prompt)
         prompt = self._prompt_builder.build_night_prompt(seer, candidates)
         return self._invoke_with_codex_retry(seer, prompt, "night", candidates)
 
     def generate_speech(
         self, player: str, role: Role, public_log: str, seer_result_summary: str = ""
     ) -> str:
+        config = self._configs[player]
+        if config.response_mode == "natural_text":
+            prompt = self._prompt_builder.build_natural_speech_prompt(
+                player, role, public_log, seer_result_summary
+            )
+            return self._invoke(player, prompt)
         prompt = self._prompt_builder.build_speech_prompt(player, role, public_log, seer_result_summary)
         return self._invoke_with_codex_retry(player, prompt, "speech", [])
 
@@ -239,6 +274,12 @@ class AgentInvoker(PlayerAgent):
         public_log: str,
         seer_result_summary: str = "",
     ) -> str:
+        config = self._configs[player]
+        if config.response_mode == "natural_text":
+            prompt = self._prompt_builder.build_natural_vote_prompt(
+                player, role, candidates, public_log, seer_result_summary
+            )
+            return self._invoke(player, prompt)
         prompt = self._prompt_builder.build_vote_prompt(player, role, candidates, public_log, seer_result_summary)
         return self._invoke_with_codex_retry(player, prompt, "vote", candidates)
 
@@ -278,7 +319,12 @@ class AgentInvoker(PlayerAgent):
         try:
             cwd = temp_dir.name
             if player == _CODEX_PLAYER_NAME:
-                (Path(cwd) / "AGENTS.md").write_text(_CODEX_LOCAL_AGENTS_MD, encoding="utf-8")
+                agents_md = (
+                    _CODEX_NATURAL_TEXT_AGENTS_MD
+                    if config.response_mode == "natural_text"
+                    else _CODEX_LOCAL_AGENTS_MD
+                )
+                (Path(cwd) / "AGENTS.md").write_text(agents_md, encoding="utf-8")
             try:
                 res = subprocess.run(
                     cmd,
@@ -402,6 +448,77 @@ class PromptBuilder:
         )
         return self._assemble(player, role, phase_text)
 
+    def build_natural_night_prompt(self, player: str, candidates: Sequence[str]) -> str:
+        return "\n".join(
+            [
+                f"あなたはAI版ワンナイト人狼ゲームのプレイヤー {player} です。",
+                "JSONではなく、普通の日本語の文章で答えてください。",
+                "追加質問はしないでください。",
+                "",
+                "フェーズ: 夜（占い）",
+                "役職: 占い師",
+                f"占い候補: {self._format_names(candidates)}",
+                "",
+                "候補者の中から1人だけ、誰を占うかを明記してください。",
+                "その理由も書いてください。",
+            ]
+        )
+
+    def build_natural_speech_prompt(
+        self, player: str, role: Role, public_log: str, seer_result_summary: str = ""
+    ) -> str:
+        lines = [
+            f"あなたはAI版ワンナイト人狼ゲームのプレイヤー {player} です。",
+            "JSONではなく、普通の日本語の文章で答えてください。",
+            "追加質問はしないでください。",
+            "",
+            "フェーズ: 発言",
+            f"役職: {role.value}",
+            f"プレイヤー: {self._player_list_text}",
+        ]
+        if seer_result_summary:
+            lines.extend(["あなたの占い結果:", seer_result_summary])
+        lines.extend(
+            [
+                "公開ログ:",
+                public_log or "まだ発言はありません。",
+                "",
+                "自分の役職と公開ログに基づいて、自分の発言を書いてください。",
+                "その発言をする理由も書いてください。",
+            ]
+        )
+        return "\n".join(lines)
+
+    def build_natural_vote_prompt(
+        self,
+        player: str,
+        role: Role,
+        candidates: Sequence[str],
+        public_log: str,
+        seer_result_summary: str = "",
+    ) -> str:
+        lines = [
+            f"あなたはAI版ワンナイト人狼ゲームのプレイヤー {player} です。",
+            "JSONではなく、普通の日本語の文章で答えてください。",
+            "追加質問はしないでください。",
+            "",
+            "フェーズ: 投票",
+            f"役職: {role.value}",
+            f"投票候補: {self._format_names(candidates)}",
+        ]
+        if seer_result_summary:
+            lines.extend(["あなたの占い結果:", seer_result_summary])
+        lines.extend(
+            [
+                "公開ログ:",
+                public_log or "まだ発言はありません。",
+                "",
+                "候補者の中から1人だけ、誰に投票するかを明記してください。",
+                "その理由も書いてください。",
+            ]
+        )
+        return "\n".join(lines)
+
     def _assemble(self, player: str, role: Role, phase_text: str) -> str:
         common_text = self._render(self._common_template, player_name=player)
         role_text = self._render(self._role_templates[role], player_name=player)
@@ -415,6 +532,10 @@ class PromptBuilder:
         if leftover:
             raise ValueError(f"unresolved placeholder {leftover.group(0)!r} in assembled prompt")
         return prompt
+
+    @staticmethod
+    def _format_names(names: Sequence[str]) -> str:
+        return "、".join(names)
 
     def _render(self, template: str, **values: str) -> str:
         text = template.replace("{{player_list}}", self._player_list_text)
